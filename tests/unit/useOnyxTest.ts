@@ -1051,11 +1051,10 @@ describe('useOnyx', () => {
             expect(renderCount).toBe(2);
         });
 
-        // Covers the `if (hasMountedRef.current)` branch — i.e. the reset that runs on key-change re-subscriptions.
-        // The reset is what makes the hook transition through 'loading' for the new key instead of leaking the
-        // previous key's value/status. These tests verify both the render count AND the loading transition,
-        // so removing the reset (regression in the other direction) is also caught.
-        it('should transition through loading and render exactly 4 times when switching from a cached key to an uncached one', async () => {
+        // A key change swaps the hook to the slot of the new key, so the previous key's value must never
+        // be rendered again. These tests pin both the render sequence AND the loading transition, so a
+        // regression in either direction (a leaked stale frame, or a lost 'loading' frame) is caught.
+        it('should transition through loading and render exactly 3 times when switching from a cached key to an uncached one', async () => {
             await Onyx.set(`${ONYXKEYS.COLLECTION.TEST_KEY}A`, 'A_value');
 
             const renders: Array<{value: unknown; status: string}> = [];
@@ -1082,17 +1081,15 @@ describe('useOnyx', () => {
 
             expect(result.current[0]).toBeUndefined();
             expect(result.current[1].status).toEqual('loaded');
-            // 1 mount render + 3 renders for the key switch (transient stale render, post-subscribe 'loading',
-            // callback-driven 'loaded'). The 'loading' render only happens because the subscribe-time reset
-            // clears the previous key's resultRef — removing the reset makes this assertion fail.
-            expect(renders.length).toBe(4);
-            // Verify the reset took effect: a 'loading' frame must appear after the key change.
-            const postSwitchStatuses = renders.slice(rendersAfterMount).map((r) => r.status);
-            expect(postSwitchStatuses).toContain('loading');
-            expect(postSwitchStatuses[postSwitchStatuses.length - 1]).toBe('loaded');
+            // 1 mount render + 2 renders for the key switch ('loading' for the new key, then 'loaded').
+            expect(renders.length).toBe(3);
+            const postSwitchRenders = renders.slice(rendersAfterMount);
+            expect(postSwitchRenders.map((r) => r.status)).toEqual(['loading', 'loaded']);
+            // No frame may carry the previous key's value.
+            expect(postSwitchRenders.every((r) => r.value === undefined)).toBe(true);
         });
 
-        it('should transition through loading and render exactly 3 times when switching between two cached keys', async () => {
+        it('should render exactly twice when switching between two cached keys', async () => {
             await Onyx.set(`${ONYXKEYS.COLLECTION.TEST_KEY}A`, 'A_value');
             await Onyx.set(`${ONYXKEYS.COLLECTION.TEST_KEY}B`, 'B_value');
 
@@ -1118,8 +1115,10 @@ describe('useOnyx', () => {
 
             expect(result.current[0]).toEqual('B_value');
             expect(result.current[1].status).toEqual('loaded');
-            // 1 mount render + 2 renders for the cached-to-cached switch.
-            expect(renders.length).toBe(3);
+            // 1 mount render + 1 render for the switch. Both keys are cached, so the new value is
+            // available in the same render and the hook never passes through a 'loading' frame.
+            expect(renders.length).toBe(2);
+            expect(renders[1]).toEqual({value: 'B_value', status: 'loaded'});
         });
     });
 });
