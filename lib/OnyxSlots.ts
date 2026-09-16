@@ -60,6 +60,13 @@ const slots = new Map<string, OnyxSlot<unknown>>();
  */
 const lastResultPerKey = new Map<OnyxKey, UseOnyxResult<unknown>>();
 
+/**
+ * How many slots hold a live connection per Onyx key, private ones included. The last one to
+ * disconnect drops the key's entry from `lastResultPerKey`, so an unmounted key stops retaining
+ * its last result.
+ */
+const connectedSlotCounts = new Map<OnyxKey, number>();
+
 const selectorIDs = new WeakMap<object, number>();
 let lastSelectorID = 0;
 
@@ -96,7 +103,6 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
         if (!isDirty) {
             return result;
         }
-        isDirty = false;
 
         // Until the first connection callback fires we serve whatever the cache already holds, so a
         // hook mounting on a warm key renders the value right away instead of flashing `undefined`.
@@ -132,6 +138,9 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
             lastResultPerKey.set(key, result);
         }
 
+        // Cleared only after a successful compute, so a throwing selector is retried by React and the
+        // error reaches its error boundary instead of a retry serving the stale result.
+        isDirty = false;
         return result;
     }
 
@@ -157,6 +166,7 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
                 callback: onConnectionCallback,
                 reuseConnection,
             });
+            connectedSlotCounts.set(key, (connectedSlotCounts.get(key) ?? 0) + 1);
         }
 
         return () => {
@@ -181,6 +191,16 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
                 if (connection) {
                     connectionManager.disconnect(connection);
                     connection = null;
+
+                    // Counted once per connection, because several cleanups can queue a microtask
+                    // for the same slot. The key's last result stays while another slot needs it.
+                    const remainingSlots = (connectedSlotCounts.get(key) ?? 1) - 1;
+                    if (remainingSlots === 0) {
+                        connectedSlotCounts.delete(key);
+                        lastResultPerKey.delete(key);
+                    } else {
+                        connectedSlotCounts.set(key, remainingSlots);
+                    }
                 }
                 isConnected = false;
                 onLastSubscriber?.();
