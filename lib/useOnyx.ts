@@ -1,5 +1,6 @@
-import {useMemo, useSyncExternalStore} from 'react';
+import {useRef, useSyncExternalStore} from 'react';
 import acquireSlot from './OnyxSlots';
+import type {OnyxSlot} from './OnyxSlots';
 import type {OnyxKey, OnyxValue} from './types';
 
 type UseOnyxSelector<TKey extends OnyxKey, TReturnValue = OnyxValue<TKey>> = (data: OnyxValue<TKey> | undefined) => TReturnValue;
@@ -38,10 +39,14 @@ function useOnyx<TKey extends OnyxKey, TReturnValue = OnyxValue<TKey>>(key: TKey
     const selector = options?.selector;
     const reuseConnection = options?.reuseConnection;
 
-    // A slot is identified by the (key, selector, reuseConnection) triple, so changing any of them
-    // swaps the slot. `subscribe` and `getSnapshot` change with it, which is what makes React
-    // resubscribe and read the new key's value in the same render.
-    const slot = useMemo(() => acquireSlot<TKey, TReturnValue>(key, selector, reuseConnection), [key, selector, reuseConnection]);
+    // The slot the hook used until this render. A changed key, selector or reuseConnection swaps
+    // it (see `acquireSlot`), which also swaps `subscribe` and `getSnapshot`, and that is what
+    // makes React resubscribe and read the new key's value in the same render.
+    /* eslint-disable react-hooks/refs -- render state that has to survive a selector reference change, so no hook dependency can hold it */
+    const slotRef = useRef<OnyxSlot<TReturnValue> | null>(null);
+    const slot = acquireSlot<TKey, TReturnValue>(key, selector, reuseConnection, slotRef.current);
+    slotRef.current = slot;
+    /* eslint-enable react-hooks/refs */
 
     return useSyncExternalStore<UseOnyxResult<TReturnValue>>(slot.subscribe, slot.getSnapshot);
 }

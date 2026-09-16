@@ -44,28 +44,26 @@ type OnyxSlot<TReturnValue> = {
 
     /** Forces the next `getSnapshot()` to recompute from the Onyx cache. */
     invalidate: () => void;
+
+    /** The state a slot created for the same key by the same hook starts from. */
+    getSeed: () => OnyxSlotSeed<TReturnValue>;
+};
+
+/**
+ * A slot is identified by its selector, so a hook that renders a fresh selector reference gets a
+ * fresh slot on every render. Left alone, that slot has no previous value to compare against and
+ * publishes a newly allocated result, which every consumer of the result identity (an effect
+ * dependency, a memo, `useSyncExternalStore` itself) reads as a change. The hook therefore hands
+ * the state of its previous slot to the new one, which restores the per-hook memory the legacy
+ * refs used to provide while slots for stable selectors stay shared.
+ */
+type OnyxSlotSeed<TReturnValue> = {
+    isConnected: boolean;
+    previousValue: NonNullable<TReturnValue> | undefined | typeof PENDING_FIRST_READ;
+    result: UseOnyxResult<TReturnValue>;
 };
 
 const slots = new Map<string, OnyxSlot<unknown>>();
-
-/**
- * The last result published for an Onyx key, across every selector watching it.
- *
- * A slot is identified by its selector, so a component that renders a fresh selector reference gets
- * a fresh slot, and a fresh slot has no previous value to compare against: its first read always
- * publishes a newly allocated result. `useSyncExternalStore` compares snapshots by identity, so that
- * new tuple reads as a change and re-renders the component, which renders another selector, and the
- * two feed each other forever. Reusing the identity of a content-equal result breaks that loop the
- * same way the hook's own `resultRef` used to.
- */
-const lastResultPerKey = new Map<OnyxKey, UseOnyxResult<unknown>>();
-
-/**
- * How many slots hold a live connection per Onyx key, private ones included. The last one to
- * disconnect drops the key's entry from `lastResultPerKey`, so an unmounted key stops retaining
- * its last result.
- */
-const connectedSlotCounts = new Map<OnyxKey, number>();
 
 const selectorIDs = new WeakMap<object, number>();
 let lastSelectorID = 0;
@@ -85,19 +83,23 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
     key: TKey,
     selector: UseOnyxSelector<TKey, TReturnValue> | undefined,
     reuseConnection: boolean | undefined,
+    seed: OnyxSlotSeed<TReturnValue> | undefined,
     onFirstSubscriber?: () => void,
     onLastSubscriber?: () => void,
 ): OnyxSlot<TReturnValue> {
-    // Caches by input reference with a deepEqual fallback on the output, so the returned reference
-    // stays stable when an unrelated part of the key's value changes.
-    const memoizedSelector = selector ? createMemoizedSelector(selector) : undefined;
     const subscribers = new Set<() => void>();
 
     let connection: Connection | null = null;
-    let isConnected = false;
+    let isConnected = seed ? seed.isConnected : false;
     let isDirty = true;
-    let previousValue: NonNullable<TReturnValue> | undefined | typeof PENDING_FIRST_READ = PENDING_FIRST_READ;
-    let result: UseOnyxResult<TReturnValue> = [undefined, LOADING_METADATA];
+    let previousValue: NonNullable<TReturnValue> | undefined | typeof PENDING_FIRST_READ = seed ? seed.previousValue : PENDING_FIRST_READ;
+    let result: UseOnyxResult<TReturnValue> = seed ? seed.result : [undefined, LOADING_METADATA];
+
+    // Caches by input reference with a deepEqual fallback on the output, so the returned reference
+    // stays stable when an unrelated part of the key's value changes. Seeded with the value the
+    // previous slot delivered, so a new selector reference producing deep-equal data keeps it.
+    const seedOutput = previousValue === PENDING_FIRST_READ ? undefined : {value: previousValue};
+    const memoizedSelector = selector ? createMemoizedSelector<OnyxValue<TKey> | undefined, TReturnValue | undefined>(selector, seedOutput) : undefined;
 
     function getSnapshot(): UseOnyxResult<TReturnValue> {
         if (!isDirty) {
@@ -131,11 +133,7 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
         const shouldUpdateResult = !areValuesEqual || (!hasComputedBefore && (OnyxCache.hasCacheForKey(key) || OnyxCache.hasPendingTask(TASK.CLEAR) || !isFirstConnection));
         if (shouldUpdateResult) {
             previousValue = newValue;
-
-            const lastResult = lastResultPerKey.get(key);
-            const canReuseLastResult = lastResult !== undefined && lastResult[1] === metadata && memoizedShallowEqual(lastResult[0], newValue);
-            result = canReuseLastResult ? (lastResult as UseOnyxResult<TReturnValue>) : [newValue, metadata];
-            lastResultPerKey.set(key, result);
+            result = [newValue, metadata];
         }
 
         // Cleared only after a successful compute, so a throwing selector is retried by React and the
@@ -166,7 +164,6 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
                 callback: onConnectionCallback,
                 reuseConnection,
             });
-            connectedSlotCounts.set(key, (connectedSlotCounts.get(key) ?? 0) + 1);
         }
 
         return () => {
@@ -191,16 +188,6 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
                 if (connection) {
                     connectionManager.disconnect(connection);
                     connection = null;
-
-                    // Counted once per connection, because several cleanups can queue a microtask
-                    // for the same slot. The key's last result stays while another slot needs it.
-                    const remainingSlots = (connectedSlotCounts.get(key) ?? 1) - 1;
-                    if (remainingSlots === 0) {
-                        connectedSlotCounts.delete(key);
-                        lastResultPerKey.delete(key);
-                    } else {
-                        connectedSlotCounts.set(key, remainingSlots);
-                    }
                 }
                 isConnected = false;
                 onLastSubscriber?.();
@@ -217,6 +204,7 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
         invalidate: () => {
             isDirty = true;
         },
+        getSeed: () => ({isConnected, previousValue, result}),
     };
 }
 
@@ -224,14 +212,29 @@ function createSlot<TKey extends OnyxKey, TReturnValue>(
  * Returns the slot for a (key, selector) pair, creating it on first use. A slot is shared by every
  * hook using that pair, so they also share one Onyx connection.
  *
+ * `previousSlot` is the slot the calling hook used until this render. It is returned as is while
+ * the triple matches. A newly created slot for the same key starts from its state (see
+ * `OnyxSlotSeed`); a slot found in the registry keeps its own.
+ *
  * `reuseConnection: false` opts out of sharing entirely and gets a standalone slot that is never
  * published to the registry.
  */
-function acquireSlot<TKey extends OnyxKey, TReturnValue>(key: TKey, selector: UseOnyxSelector<TKey, TReturnValue> | undefined, reuseConnection: boolean | undefined): OnyxSlot<TReturnValue> {
+function acquireSlot<TKey extends OnyxKey, TReturnValue>(
+    key: TKey,
+    selector: UseOnyxSelector<TKey, TReturnValue> | undefined,
+    reuseConnection: boolean | undefined,
+    previousSlot: OnyxSlot<TReturnValue> | null,
+): OnyxSlot<TReturnValue> {
+    if (previousSlot !== null && previousSlot.key === key && previousSlot.selector === selector && previousSlot.reuseConnection === reuseConnection) {
+        return previousSlot;
+    }
+
+    const seed = previousSlot?.key === key ? previousSlot.getSeed() : undefined;
+
     // A subscriber that opted out of connection reuse also opts out of slot sharing, so its slot is
     // never published to the registry.
     if (reuseConnection === false) {
-        return createSlot(key, selector, reuseConnection);
+        return createSlot(key, selector, reuseConnection, seed);
     }
 
     // Same composition as the snapshot cache used before, with the selectorless case (the common
@@ -250,6 +253,7 @@ function acquireSlot<TKey extends OnyxKey, TReturnValue>(key: TKey, selector: Us
         key,
         selector,
         reuseConnection,
+        seed,
         // Re-publishes a slot that was evicted while its last hook was between two subscriptions,
         // which is what React does on a StrictMode remount.
         () => {
@@ -276,8 +280,6 @@ function acquireSlot<TKey extends OnyxKey, TReturnValue>(key: TKey, selector: Us
  * under the hooks, e.g. by `Onyx.clear()`.
  */
 function invalidateAllSlots(): void {
-    lastResultPerKey.clear();
-
     for (const slot of slots.values()) {
         slot.invalidate();
     }

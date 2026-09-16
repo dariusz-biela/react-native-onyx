@@ -1,5 +1,5 @@
 import {act, render, screen} from '@testing-library/react-native';
-import React, {StrictMode} from 'react';
+import React, {StrictMode, useEffect, useState} from 'react';
 import {Text} from 'react-native';
 import type {OnyxEntry, OnyxKey, UseOnyxOptions} from '../../lib';
 import Onyx, {useOnyx} from '../../lib';
@@ -7,7 +7,7 @@ import OnyxUtils from '../../lib/OnyxUtils';
 import type {UseOnyxSelector} from '../../lib/useOnyx';
 import waitForPromisesToResolve from '../utils/waitForPromisesToResolve';
 
-const ONYXKEYS = {TEST_KEY: 'test'};
+const ONYXKEYS = {TEST_KEY: 'test', OTHER_KEY: 'other'};
 
 Onyx.init({keys: ONYXKEYS});
 
@@ -27,10 +27,115 @@ function Child({options}: {options: UseOnyxOptions<OnyxKey, number | undefined>}
     return <Text>{String(result[0])}</Text>;
 }
 
+type NestedValue = {nested: {a: number | undefined}};
+
+/** Allocates a fresh selector and a fresh nested output on every call, which no shallow comparison can dedupe. */
+function selectNested(value: OnyxEntry<TestValue>): NestedValue {
+    return {nested: {a: value?.a}};
+}
+
+function NestedChild({onyxKey = ONYXKEYS.TEST_KEY}: {onyxKey?: string}) {
+    // eslint-disable-next-line rulesdir/no-inline-useOnyx-selector -- the test needs a selector reference that changes every render
+    const result = useOnyx(onyxKey, {selector: (value) => selectNested(value as OnyxEntry<TestValue>)});
+    results.push(result);
+    return <Text>{String(result[0]?.nested.a)}</Text>;
+}
+
+const MAX_EFFECT_RUNS = 20;
+let effectRuns = 0;
+
+/** Mirrors a component whose effect reacts to the selected value and updates its own state. */
+function EffectChild() {
+    // eslint-disable-next-line rulesdir/no-inline-useOnyx-selector -- the test needs a selector reference that changes every render
+    const [value] = useOnyx(ONYXKEYS.TEST_KEY, {selector: (data) => selectNested(data as OnyxEntry<TestValue>)});
+    const [, setTick] = useState(0);
+    useEffect(() => {
+        effectRuns++;
+        if (effectRuns < MAX_EFFECT_RUNS) {
+            setTick((tick) => tick + 1);
+        }
+    }, [value]);
+    return <Text>{String(value?.nested.a)}</Text>;
+}
+
 beforeEach(async () => {
     await Onyx.clear();
     selectorCalls = 0;
     results.length = 0;
+    effectRuns = 0;
+});
+
+describe('unstable selector reference', () => {
+    it('keeps the result identity across renders when the selected data is deep-equal', async () => {
+        await Onyx.set(ONYXKEYS.TEST_KEY, {a: 1, b: 2});
+
+        const {rerender} = render(<NestedChild />);
+        await act(async () => waitForPromisesToResolve());
+        for (let i = 0; i < 5; i++) {
+            rerender(<NestedChild />);
+        }
+        await act(async () => waitForPromisesToResolve());
+
+        expect(results.length).toBeGreaterThanOrEqual(6);
+        expect(results[0]).toEqual([{nested: {a: 1}}, {status: 'loaded'}]);
+        expect(results.every((result) => result === results[0])).toBe(true);
+    });
+
+    it('keeps the result identity across renders when the selected data is undefined', async () => {
+        await Onyx.set(ONYXKEYS.TEST_KEY, {a: 1, b: 2});
+
+        const {rerender} = render(<Child options={{selector: (value) => (value as {missing?: number} | undefined)?.missing}} />);
+        await act(async () => waitForPromisesToResolve());
+        for (let i = 0; i < 5; i++) {
+            rerender(<Child options={{selector: (value) => (value as {missing?: number} | undefined)?.missing}} />);
+        }
+        await act(async () => waitForPromisesToResolve());
+
+        expect(results.length).toBeGreaterThanOrEqual(6);
+        expect(results[0]).toEqual([undefined, {status: 'loaded'}]);
+        expect(results.every((result) => result === results[0])).toBe(true);
+    });
+
+    it('does not loop through an effect that updates state when the selected value changes identity', async () => {
+        await Onyx.set(ONYXKEYS.TEST_KEY, {a: 1, b: 2});
+
+        render(<EffectChild />);
+        await act(async () => waitForPromisesToResolve());
+
+        expect(effectRuns).toBe(1);
+        expect(screen.getByText('1')).toBeTruthy();
+    });
+
+    it('publishes a new result when the selected data changes', async () => {
+        await Onyx.set(ONYXKEYS.TEST_KEY, {a: 1, b: 2});
+
+        const {rerender} = render(<NestedChild />);
+        await act(async () => waitForPromisesToResolve());
+        rerender(<NestedChild />);
+        await act(async () => Onyx.merge(ONYXKEYS.TEST_KEY, {b: 3}));
+        expect(screen.getByText('1')).toBeTruthy();
+        const resultBeforeChange = results.at(-1);
+
+        await act(async () => Onyx.merge(ONYXKEYS.TEST_KEY, {a: 2}));
+        rerender(<NestedChild />);
+        await act(async () => waitForPromisesToResolve());
+
+        expect(screen.getByText('2')).toBeTruthy();
+        expect(results.at(-1)).not.toBe(resultBeforeChange);
+        expect(results.at(-1)).toEqual([{nested: {a: 2}}, {status: 'loaded'}]);
+    });
+
+    it('reads the new key instead of the previous result when the key changes', async () => {
+        await Onyx.set(ONYXKEYS.TEST_KEY, {a: 1, b: 2});
+        await Onyx.set(ONYXKEYS.OTHER_KEY, {a: 5, b: 2});
+
+        const {rerender} = render(<NestedChild />);
+        await act(async () => waitForPromisesToResolve());
+        rerender(<NestedChild onyxKey={ONYXKEYS.OTHER_KEY} />);
+        await act(async () => waitForPromisesToResolve());
+
+        expect(screen.getByText('5')).toBeTruthy();
+    });
 });
 
 describe('slot sharing', () => {
