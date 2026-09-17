@@ -30,6 +30,7 @@ import OnyxKeys from './OnyxKeys';
 import logMessages from './logMessages';
 import type {Connection} from './OnyxConnectionManager';
 import connectionManager from './OnyxConnectionManager';
+import {invalidateAllSlots} from './OnyxSlots';
 import OnyxMerge from './OnyxMerge';
 
 /** Initialize the store with actions and listening for storage events */
@@ -424,7 +425,12 @@ function clear(keysToPreserve: OnyxKey[] = []): Promise<void> {
                 // Remove only the items that we want cleared from storage, and reset others to default
                 for (const key of keysToBeClearedFromStorage) cache.drop(key);
                 return Storage.removeItems(keysToBeClearedFromStorage)
-                    .then(() => connectionManager.refreshSessionID())
+                    .then(() => {
+                        connectionManager.refreshSessionID();
+
+                        // The cache the slots computed from is gone, so every slot has to read again.
+                        invalidateAllSlots();
+                    })
                     .then(() => Storage.multiSet(defaultKeyValuePairs))
                     .then(() => {
                         DevTools.clearState(keysToPreserve);

@@ -15,11 +15,21 @@ import {deepEqual} from 'fast-equals';
  * Stateful by design — each call to `createMemoizedSelector` produces an independent wrapper
  * with its own `lastInput`/`lastOutput` cache, so a wrapper must not be shared across
  * subscriptions that can see different inputs.
+ *
+ * `seedOutput` pre-fills the output cache, so the first call already gets the deep-equal fallback
+ * against the output a previous wrapper delivered. The input cache stays empty, so the first call
+ * always runs the selector.
  */
-function createMemoizedSelector<TInput, TOutput>(selector: (input: TInput) => TOutput): (input: TInput) => TOutput {
+function createMemoizedSelector<TInput, TOutput>(selector: (input: TInput) => TOutput, seedOutput?: {value: TOutput}): (input: TInput) => TOutput {
     let lastInput: TInput;
     let lastOutput: TOutput;
     let hasComputed = false;
+    let hasOutput = false;
+
+    if (seedOutput) {
+        lastOutput = seedOutput.value;
+        hasOutput = true;
+    }
 
     return (input) => {
         if (hasComputed && lastInput === input) {
@@ -27,9 +37,10 @@ function createMemoizedSelector<TInput, TOutput>(selector: (input: TInput) => TO
         }
         const next = selector(input);
         lastInput = input;
-        if (!hasComputed || !deepEqual(lastOutput, next)) {
+        hasComputed = true;
+        if (!hasOutput || !deepEqual(lastOutput, next)) {
             lastOutput = next;
-            hasComputed = true;
+            hasOutput = true;
         }
         return lastOutput;
     };

@@ -126,4 +126,14 @@ describe('createMemoizedSelector', () => {
         expect(second.meta).toBe(first.meta);
         expect(second.items).toBe(first.items);
     });
+
+    it('returns the seeded output reference when the first call produces a deep-equal output', () => {
+        const seeded = {id: 1};
+        const selector = jest.fn((data: {id: number}) => ({id: data.id}));
+        const memoized = createMemoizedSelector(selector, {value: seeded});
+
+        expect(memoized({id: 1})).toBe(seeded);
+        expect(memoized({id: 2})).toEqual({id: 2});
+        expect(selector).toHaveBeenCalledTimes(2);
+    });
 });
