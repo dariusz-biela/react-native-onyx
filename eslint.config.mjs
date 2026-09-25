@@ -7,7 +7,7 @@ export default [
     ...expensify,
     prettierConfig,
     {
-        ignores: ['dist/**', 'node_modules/**', '.github/**', '*.d.ts', '*.config.js', '*.config.cjs', 'tests/types/**/*.ts', 'agent-queue/**'],
+        ignores: ['dist/**', 'node_modules/**', '.github/**', '*.d.ts', '*.config.js', '*.config.cjs', 'tests/types/**/*.ts', 'agent-queue/**', 'perf-suite/**'],
     },
     {
         // Overwriting this for now because web-e will conflict with this

@@ -17,5 +17,5 @@
         "declaration": true,
         "outDir": "./dist"
     },
-    "exclude": ["**/node_modules/**/*", "**/dist/**/*", "tests/types/**/*.ts", "agent-queue/**/*"]
+    "exclude": ["**/node_modules/**/*", "**/dist/**/*", "tests/types/**/*.ts", "agent-queue/**/*", "perf-suite/**/*"]
 }

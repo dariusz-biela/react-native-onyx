@@ -18,3 +18,9 @@ yalc.lock
 
 # Perf tests
 .reassure
+
+# Perf suite
+perf-suite/.build
+perf-suite/.hotswap
+perf-suite/.jest-cache
+perf-suite/results

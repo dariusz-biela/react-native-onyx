@@ -1,0 +1,18 @@
+{
+    "name": "react-native-onyx-perf-suite",
+    "private": true,
+    "description": "A/B performance suite for Onyx, independent of lib/ and tests/. Only the packages that must differ from the root live here: the React version Expensify/App runs, the compiler it builds components with and the data libraries of the fixture generators. Everything else resolves from the root node_modules.",
+    "scripts": {
+        "ab": "scripts/ab.sh",
+        "typecheck": "scripts/typecheck.sh"
+    },
+    "devDependencies": {
+        "@ngneat/falso": "7.1.1",
+        "@types/react": "19.2.3",
+        "@types/react-test-renderer": "19.1.0",
+        "babel-plugin-react-compiler": "0.0.0-experimental-a1856f3-20260507",
+        "date-fns": "4.1.0",
+        "react": "19.2.3",
+        "react-test-renderer": "19.2.3"
+    }
+}

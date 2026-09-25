@@ -1,0 +1,29 @@
+{
+    "$schema": "https://json.schemastore.org/tsconfig",
+    "compilerOptions": {
+        "target": "es2022",
+        "module": "preserve",
+        "moduleResolution": "bundler",
+        "lib": ["esnext", "dom"],
+        "types": ["node", "jest"],
+        "typeRoots": ["node_modules/@types", "../node_modules/@types"],
+        "jsx": "react-jsx",
+        "strict": true,
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "allowImportingTsExtensions": true,
+        "paths": {
+            "react-native-onyx": ["./.build/types/index.d.ts"],
+            "react-native-onyx/dist/*": ["./.build/types/*"],
+            "@app/*": ["./app/*"],
+            "react-native": ["./app/reactNative.ts"],
+            "react": ["./node_modules/@types/react"],
+            "react/*": ["./node_modules/@types/react/*"]
+        }
+    },
+    "include": ["app", "entry", "fixtures", "harness", "jest", "scripts", "suites"],
+    "exclude": ["app/snapshot", "node_modules", ".build", ".hotswap", ".jest-cache", "results"]
+}
