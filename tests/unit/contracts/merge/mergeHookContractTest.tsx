@@ -10,7 +10,6 @@ import type {OnyxKey} from '../../../../lib';
 
 import Onyx, {useOnyx} from '../../../../lib';
 import cache from '../../../../lib/OnyxCache';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import {KEYS, flush, initOnyxForMergeContracts} from './helpers/harness';
 import {MERGE_VARIANTS, setMergeVariant} from './helpers/mergeVariant';
 
@@ -48,8 +47,6 @@ describe.each(MERGE_VARIANTS)('useOnyx with Onyx.merge (%s OnyxMerge)', (variant
     beforeEach(async () => {
         setMergeVariant(variant);
         await Onyx.clear();
-        onyxSnapshotCache.clear();
-        onyxSnapshotCache.clearSelectorIds();
     });
 
     it('renders the final value of a same-tick burst and only valid states on the way', async () => {

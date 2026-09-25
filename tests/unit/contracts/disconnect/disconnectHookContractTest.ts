@@ -1,8 +1,6 @@
 import {act, renderHook} from '@testing-library/react-native';
 import Onyx, {useOnyx} from '../../../../lib';
-import connectionManager from '../../../../lib/OnyxConnectionManager';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
-import OnyxUtils from '../../../../lib/OnyxUtils';
+import onyxSubscriptionManager from '../../../../lib/OnyxSubscriptionManager';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const KEYS = {
@@ -18,30 +16,14 @@ const ITEM_1 = `${KEYS.COLLECTION.ITEMS}1`;
 Onyx.init({keys: KEYS});
 
 beforeEach(async () => {
-    connectionManager.disconnectAll();
+    onyxSubscriptionManager.clearAll();
     await Onyx.clear();
-    onyxSnapshotCache.clear();
-    onyxSnapshotCache.clearSelectorIds();
     await waitForPromisesToResolve();
 });
 
 afterEach(() => {
     jest.restoreAllMocks();
 });
-
-async function writeThenClearValue(key: string): Promise<void> {
-    await Onyx.set(key, 'x');
-    await Onyx.set(key, null);
-}
-
-// A subscriber that opens a new connection to a missing key gets (undefined, undefined); one that joins a leaked connection gets its cached key.
-async function firstCallOfNewSubscriber(key: string): Promise<unknown[]> {
-    const spy = jest.fn<void, [unknown, unknown]>();
-    const connection = Onyx.connect({key, callback: spy});
-    await waitForPromisesToResolve();
-    Onyx.disconnect(connection);
-    return spy.mock.calls;
-}
 
 async function write(callback: () => Promise<void>): Promise<void> {
     await act(async () => {
@@ -51,15 +33,15 @@ async function write(callback: () => Promise<void>): Promise<void> {
 }
 
 describe('useOnyx unmount disconnect contracts', () => {
-    it('keeps a sibling hook on the same key updating after one hook unmounts, for shared and separate connections', async () => {
-        const shared = renderHook(() => useOnyx(KEYS.PLAIN));
+    it('keeps a sibling hook on the same key updating after the other hooks on that key unmount one by one', async () => {
+        const first = renderHook(() => useOnyx(KEYS.PLAIN));
         const sibling = renderHook(() => useOnyx(KEYS.PLAIN));
-        const separate = renderHook(() => useOnyx(KEYS.PLAIN, {reuseConnection: false}));
+        const third = renderHook(() => useOnyx(KEYS.PLAIN));
         await act(async () => waitForPromisesToResolve());
 
-        shared.unmount();
+        first.unmount();
         await write(() => Onyx.set(KEYS.PLAIN, 'after-unmount'));
-        separate.unmount();
+        third.unmount();
         await write(() => Onyx.merge(KEYS.PLAIN, 'after-second-unmount'));
 
         expect(sibling.result.current[0]).toBe('after-second-unmount');
@@ -82,7 +64,7 @@ describe('useOnyx unmount disconnect contracts', () => {
         expect(second.result.current[0]).toBe('after-remount');
     });
 
-    it('keeps an Onyx.connect subscriber on the shared connection alive after the hook unmounts, and the hook alive after the subscriber disconnects', async () => {
+    it('keeps an Onyx.connect subscriber on the same key alive after the hook unmounts, and the hook alive after the subscriber disconnects', async () => {
         const callback = jest.fn<void, [unknown, unknown]>();
         const connection = Onyx.connect({key: KEYS.PLAIN, callback});
         const hook = renderHook(() => useOnyx(KEYS.PLAIN));
@@ -115,11 +97,12 @@ describe('useOnyx unmount disconnect contracts', () => {
         expect(collectionAgain.result.current[0]).toEqual({[ITEM_1]: {v: 2}});
     });
 
-    it('does not throw when a hook unmounts after disconnectAll, and new hooks still subscribe', async () => {
+    // main pinned connectionManager.disconnectAll in the next two tests; #834 replaced it with onyxSubscriptionManager.clearAll.
+    it('does not throw when a hook unmounts after clearAll, and new hooks still subscribe', async () => {
         const hook = renderHook(() => useOnyx(KEYS.PLAIN));
         await act(async () => waitForPromisesToResolve());
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
         expect(() => hook.unmount()).not.toThrow();
 
         const fresh = renderHook(() => useOnyx(KEYS.PLAIN));
@@ -129,11 +112,11 @@ describe('useOnyx unmount disconnect contracts', () => {
         expect(fresh.result.current[0]).toBe('x');
     });
 
-    it('does not break a hook mounted after disconnectAll when a pre-disconnectAll hook on the same key unmounts', async () => {
+    it('does not break a hook mounted after clearAll when a pre-clearAll hook on the same key unmounts', async () => {
         const old = renderHook(() => useOnyx(KEYS.PLAIN));
         await act(async () => waitForPromisesToResolve());
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
         const fresh = renderHook(() => useOnyx(KEYS.PLAIN));
         await act(async () => waitForPromisesToResolve());
         old.unmount();
@@ -156,60 +139,52 @@ describe('useOnyx unmount disconnect contracts', () => {
         expect(hook.result.current[0]).toBe('other-changed');
     });
 
-    it('releases the shared connection on unmount, so a subscriber connecting later opens a new one', async () => {
+    // main detected a leaked shared connection through the key argument of a later Onyx.connect; #834 has no shared connections, so these read the listener registry.
+    it('releases the subscription on unmount', async () => {
         const hook = renderHook(() => useOnyx(KEYS.PLAIN));
         await act(async () => waitForPromisesToResolve());
-        await write(() => writeThenClearValue(KEYS.PLAIN));
+        expect(onyxSubscriptionManager.hasListenersForKey(KEYS.PLAIN)).toBe(true);
 
         hook.unmount();
 
-        expect(await firstCallOfNewSubscriber(KEYS.PLAIN)).toEqual([[undefined, undefined]]);
+        expect(onyxSubscriptionManager.hasListenersForKey(KEYS.PLAIN)).toBe(false);
     });
 
-    it('releases the connection of a hook unmounted before its first delivery arrived', async () => {
+    it('releases the subscription of a hook unmounted before its first delivery arrived', async () => {
         const hook = renderHook(() => useOnyx(KEYS.PLAIN));
         hook.unmount();
         await waitForPromisesToResolve();
-        await writeThenClearValue(KEYS.PLAIN);
 
-        expect(await firstCallOfNewSubscriber(KEYS.PLAIN)).toEqual([[undefined, undefined]]);
+        expect(onyxSubscriptionManager.hasListenersForKey(KEYS.PLAIN)).toBe(false);
     });
 
-    it('releases the connection of the previous key when the key changes', async () => {
+    it('releases the subscription of the previous key when the key changes', async () => {
         const hook = renderHook((key: string) => useOnyx(key), {initialProps: KEYS.PLAIN});
         await act(async () => waitForPromisesToResolve());
-        await write(() => writeThenClearValue(KEYS.PLAIN));
 
         hook.rerender(KEYS.OTHER);
         await act(async () => waitForPromisesToResolve());
 
-        expect(await firstCallOfNewSubscriber(KEYS.PLAIN)).toEqual([[undefined, undefined]]);
+        expect(onyxSubscriptionManager.hasListenersForKey(KEYS.PLAIN)).toBe(false);
+        expect(onyxSubscriptionManager.hasListenersForKey(KEYS.OTHER)).toBe(true);
     });
 
-    it('releases every underlying subscription once all hooks, shared or separate, have unmounted', async () => {
-        const subscribeSpy = jest.spyOn(OnyxUtils, 'subscribeToKey');
-        const unsubscribeSpy = jest.spyOn(OnyxUtils, 'unsubscribeFromKey');
-        const hooks = [
-            renderHook(() => useOnyx(KEYS.PLAIN)),
-            renderHook(() => useOnyx(KEYS.PLAIN)),
-            renderHook(() => useOnyx(KEYS.PLAIN, {reuseConnection: false})),
-            renderHook(() => useOnyx(KEYS.COLLECTION.ITEMS, {reuseConnection: false})),
-        ];
+    it('releases every underlying subscription once all hooks have unmounted', async () => {
+        const hooks = [renderHook(() => useOnyx(KEYS.PLAIN)), renderHook(() => useOnyx(KEYS.PLAIN)), renderHook(() => useOnyx(KEYS.PLAIN)), renderHook(() => useOnyx(KEYS.COLLECTION.ITEMS))];
         await act(async () => waitForPromisesToResolve());
+        expect([KEYS.PLAIN, KEYS.COLLECTION.ITEMS].map((key) => onyxSubscriptionManager.hasListenersForKey(key))).toEqual([true, true]);
 
         for (const hook of hooks) {
             hook.unmount();
         }
 
-        const opened = subscribeSpy.mock.results.flatMap((result) => (result.type === 'return' ? [result.value] : []));
-        expect(opened.length).toBeGreaterThan(0);
-        expect(unsubscribeSpy.mock.calls.map(([subscriptionID]) => subscriptionID)).toEqual(expect.arrayContaining(opened));
+        expect([KEYS.PLAIN, KEYS.COLLECTION.ITEMS].map((key) => onyxSubscriptionManager.hasListenersForKey(key))).toEqual([false, false]);
     });
 
     it('keeps many hooks correct through repeated mount and unmount churn on one key', async () => {
         const survivor = renderHook(() => useOnyx(KEYS.PLAIN));
         for (let i = 0; i < 20; i++) {
-            const transient = renderHook(() => useOnyx(KEYS.PLAIN, {reuseConnection: i % 2 === 0}));
+            const transient = renderHook(() => useOnyx(KEYS.PLAIN));
             await write(() => Onyx.set(KEYS.PLAIN, `v${i}`));
             expect(transient.result.current[0]).toBe(`v${i}`);
             transient.unmount();

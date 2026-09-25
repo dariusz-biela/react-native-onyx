@@ -1,4 +1,4 @@
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib/types';
 
 import Onyx from '../../../../lib';
 import * as Logger from '../../../../lib/Logger';

@@ -104,7 +104,7 @@ describe('Onyx.clear store state contract', () => {
         });
 
         it('empties collection snapshots, keeping only members that have an initial state', async () => {
-            const {Onyx, OnyxUtils} = await loadOnyx();
+            const {Onyx, OnyxUtils, subscriptions} = await loadOnyx();
             await seedAccount(Onyx);
 
             await Onyx.clear();
@@ -114,8 +114,8 @@ describe('Onyx.clear store state contract', () => {
             expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.TEST_LEVEL)).toEqual({});
             expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.RAM_ONLY_COLLECTION)).toEqual({});
             expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.DEFAULTED)).toEqual({[DEFAULT_MEMBER_KEY]: DEFAULT_MEMBER});
-            expect(OnyxUtils.tryGetCachedValue(KEYS.COLLECTION.REPORT)).toEqual({});
-            expect(OnyxUtils.tryGetCachedValue(KEYS.COLLECTION.DEFAULTED)).toEqual({[DEFAULT_MEMBER_KEY]: DEFAULT_MEMBER});
+            expect(subscriptions.getState(KEYS.COLLECTION.REPORT)).toEqual({});
+            expect(subscriptions.getState(KEYS.COLLECTION.DEFAULTED)).toEqual({[DEFAULT_MEMBER_KEY]: DEFAULT_MEMBER});
         });
 
         it('shares one empty snapshot between all emptied collections', async () => {
@@ -190,14 +190,34 @@ describe('Onyx.clear store state contract', () => {
         });
 
         it('forgets keys it had read as missing from storage', async () => {
-            const {Onyx, cache} = await loadOnyx();
-            Onyx.connect({key: 'neverWritten', callback: jest.fn()});
-            await flush();
+            const {Onyx, OnyxUtils, cache} = await loadOnyx();
+            await OnyxUtils.multiGet(['neverWritten']);
             expect(cache.hasCacheForKey('neverWritten')).toBe(true);
 
             await Onyx.clear();
 
             expect(cache.hasCacheForKey('neverWritten')).toBe(false);
+        });
+
+        it('forgets RAM-only keys it had read as empty without indexing them', async () => {
+            const {Onyx, OnyxUtils, cache} = await loadOnyx();
+            await OnyxUtils.get(KEYS.RAM_ONLY);
+            expect(cache.hasCacheForKey(KEYS.RAM_ONLY)).toBe(true);
+            expect(cache.getAllKeys().has(KEYS.RAM_ONLY)).toBe(false);
+
+            await Onyx.clear();
+
+            expect(cache.hasCacheForKey(KEYS.RAM_ONLY)).toBe(false);
+        });
+
+        it('leaves no cleared evictable collection member as an eviction candidate', async () => {
+            const {Onyx, cache} = await loadOnyx({initOptions: {evictableKeys: [KEYS.COLLECTION.TEST]}});
+            await Onyx.mergeCollection(KEYS.COLLECTION.TEST, {[`${KEYS.COLLECTION.TEST}1`]: {id: 1}, [`${KEYS.COLLECTION.TEST}2`]: {id: 2}});
+            expect(cache.getKeyForEviction()).toBe(`${KEYS.COLLECTION.TEST}1`);
+
+            await Onyx.clear();
+
+            expect(cache.getKeyForEviction()).toBeUndefined();
         });
 
         it('removes keys that reached storage without Onyx while its key index was empty', async () => {

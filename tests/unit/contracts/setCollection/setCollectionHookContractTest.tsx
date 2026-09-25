@@ -4,7 +4,7 @@ import type GenericCollection from '../../../utils/GenericCollection';
 import type {OnyxCollection} from '../../../../lib';
 
 import Onyx, {useOnyx} from '../../../../lib';
-import OnyxUtils from '../../../../lib/OnyxUtils';
+import OnyxCache from '../../../../lib/OnyxCache';
 import {KEYS, initOnyx, resetOnyx, settle} from './helpers';
 
 const ROUTES = KEYS.COLLECTION.ROUTES;
@@ -61,7 +61,7 @@ describe('setCollection seen through useOnyx', () => {
     });
 
     it('does not re-render a member hook whose value keeps its reference', async () => {
-        const valueA = OnyxUtils.tryGetCachedValue(A);
+        const valueA = OnyxCache.get(A);
         let renders = 0;
         const {result} = renderHook(() => {
             renders++;
@@ -79,7 +79,7 @@ describe('setCollection seen through useOnyx', () => {
     it('does not re-render the collection hook when every member keeps its reference', async () => {
         const current: GenericCollection = {};
         for (const key of Object.keys(SEED)) {
-            current[key] = OnyxUtils.tryGetCachedValue(key);
+            current[key] = OnyxCache.get(key);
         }
         let renders = 0;
         renderHook(() => {

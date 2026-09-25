@@ -3,7 +3,7 @@ import type {State, Update} from './harness';
 import Onyx from '../../../../lib';
 import {createRandom, randomBatch, randomInitialState, withoutKeyRemovals} from './batchGenerator';
 import {DEFAULT_VALUE, ONYX_KEYS, initOnyx, resetOnyx, seedPartlyCold} from './harness';
-import {applyUpdates} from './referenceModel';
+import {applyUpdates, coldKeysReadByUpdate} from './referenceModel';
 import {recordStorageForSQLite} from './sqliteReplay';
 
 const SEEDS = 100;
@@ -93,15 +93,18 @@ describe('Onyx.update storage writes replayed with SQLite semantics', () => {
         expect(replay()).toEqual(withDefaults(applyUpdates(initial, batch)));
     });
 
-    it.each(Array.from({length: SEEDS}, (_, index) => 6001 + index))('partly evicted cache, seed %i', async (seed) => {
-        const random = createRandom(seed);
-        const initial = randomInitialState(random);
-        const batch = withoutKeyRemovals(randomBatch(random, {length: 1 + random.int(12), methods: ORDER_INDEPENDENT_METHODS}));
-        await seedPartlyCold(initial, () => random.chance(0.5));
-        const replay = recordStorageForSQLite();
+    describe('current behaviour (#834 change)', () => {
+        // main merged onto the stored value of every cold key, so the replay ended in applyUpdates(initial, batch).
+        it.each(Array.from({length: SEEDS}, (_, index) => 6001 + index))('partly evicted cache, seed %i: a single-key merge overwrites the stored value of a cold key', async (seed) => {
+            const random = createRandom(seed);
+            const initial = randomInitialState(random);
+            const batch = withoutKeyRemovals(randomBatch(random, {length: 1 + random.int(12), methods: ORDER_INDEPENDENT_METHODS}));
+            const {warm, cold} = await seedPartlyCold(initial, () => random.chance(0.5));
+            const replay = recordStorageForSQLite();
 
-        await Onyx.update(batch);
+            await Onyx.update(batch);
 
-        expect(replay()).toEqual(withDefaults(applyUpdates(initial, batch)));
+            expect(replay()).toEqual({...cold, ...withDefaults(applyUpdates({...warm, ...coldKeysReadByUpdate(cold, batch)}, batch))});
+        });
     });
 });

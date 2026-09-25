@@ -1,5 +1,5 @@
 import lodashCloneDeep from 'lodash/cloneDeep';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib/types';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 import {deliveredValues, expectNoStaleOrRepeatedDelivery, expectOrderedSubsequenceOfStates, recordDeliveriesAgainstState} from './utils/deliveries';
 import {KEYS, startOnyx} from './utils/freshOnyx';
@@ -38,35 +38,20 @@ describe('Onyx.connect deliveries after the first one', () => {
             ]);
         });
 
-        it('delivers the first write to a key that was missing at connect time', async () => {
-            const {Onyx} = await startOnyx();
-            const callback = jest.fn();
-            Onyx.connect({key: KEYS.PLAIN, callback});
-            await waitForPromisesToResolve();
-
-            await Onyx.set(KEYS.PLAIN, 'created');
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([
-                [undefined, undefined],
-                ['created', KEYS.PLAIN],
-            ]);
-        });
-
         it('does not call the subscriber when a write leaves the value deep-equal', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: {a: {b: 1}}}});
-            const shared = jest.fn();
-            const separate = jest.fn();
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: shared}), shared);
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: separate, reuseConnection: false}), separate);
+            const first = jest.fn();
+            const second = jest.fn();
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: first}), first);
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: second}), second);
 
             await Onyx.set(KEYS.PLAIN, {a: {b: 1}});
             await Onyx.merge(KEYS.PLAIN, {a: {b: 1}});
             await Onyx.merge(KEYS.PLAIN, {});
             await waitForPromisesToResolve();
 
-            expect(shared).not.toHaveBeenCalled();
-            expect(separate).not.toHaveBeenCalled();
+            expect(first).not.toHaveBeenCalled();
+            expect(second).not.toHaveBeenCalled();
         });
 
         it('delivers a new reference on change and never mutates the previously delivered object', async () => {
@@ -225,21 +210,21 @@ describe('Onyx.connect deliveries after the first one', () => {
 
         it('delivers the same collection reference to every root subscriber in one dispatch', async () => {
             const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
-            const shared = jest.fn();
-            const sharedToo = jest.fn();
-            const separate = jest.fn();
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: shared});
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: sharedToo});
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: separate, reuseConnection: false});
+            const first = jest.fn();
+            const second = jest.fn();
+            const third = jest.fn();
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: first});
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: second});
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: third});
             await waitForPromisesToResolve();
 
             await Onyx.set(REPORT_2, {id: 2});
             await waitForPromisesToResolve();
 
-            const delivered = shared.mock.calls.at(-1)?.[0];
+            const delivered = first.mock.calls.at(-1)?.[0];
             expect(delivered).toEqual({[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}});
-            expect(sharedToo.mock.calls.at(-1)?.[0]).toBe(delivered);
-            expect(separate.mock.calls.at(-1)?.[0]).toBe(delivered);
+            expect(second.mock.calls.at(-1)?.[0]).toBe(delivered);
+            expect(third.mock.calls.at(-1)?.[0]).toBe(delivered);
             expect(Object.isFrozen(delivered)).toBe(true);
         });
     });
@@ -249,16 +234,16 @@ describe('Onyx.connect deliveries after the first one', () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: 1}});
             const order: string[] = [];
             Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`a:${String(value)}`)});
-            Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`b:${String(value)}`), reuseConnection: false});
+            Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`b:${String(value)}`)});
             Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`c:${String(value)}`)});
-            Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`d:${String(value)}`), reuseConnection: false});
+            Onyx.connect({key: KEYS.PLAIN, callback: (value) => order.push(`d:${String(value)}`)});
             await waitForPromisesToResolve();
 
             await Onyx.set(KEYS.PLAIN, 2);
             await waitForPromisesToResolve();
 
             expect(order.slice(0, 4).sort()).toEqual(['a:1', 'b:1', 'c:1', 'd:1']);
-            expect(order.slice(4)).toEqual(['a:2', 'c:2', 'b:2', 'd:2']);
+            expect(order.slice(4)).toEqual(['a:2', 'b:2', 'c:2', 'd:2']);
         });
 
         it('delivers first values of warm plain keys in connect order', async () => {
@@ -314,10 +299,10 @@ describe('Onyx.connect deliveries after the first one', () => {
     describe('interleaved writes', () => {
         it('delivers states in order and ends on the final value when writes are not awaited', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: {v: 0}}});
-            const shared = jest.fn();
-            const separate = jest.fn();
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: shared}), shared);
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: separate, reuseConnection: false}), separate);
+            const first = jest.fn();
+            const second = jest.fn();
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: first}), first);
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: second}), second);
 
             Onyx.set(KEYS.PLAIN, {v: 1});
             Onyx.merge(KEYS.PLAIN, {extra: true});
@@ -326,8 +311,8 @@ describe('Onyx.connect deliveries after the first one', () => {
             await waitForPromisesToResolve();
 
             const states = [{v: 1}, {v: 1, extra: true}, {v: 2}, {v: 3}];
-            expectOrderedSubsequenceOfStates(deliveredValues(shared), states);
-            expectOrderedSubsequenceOfStates(deliveredValues(separate), states);
+            expectOrderedSubsequenceOfStates(deliveredValues(first), states);
+            expectOrderedSubsequenceOfStates(deliveredValues(second), states);
         });
 
         it('never delivers a stale collection to the root when unawaited member writes interleave', async () => {
@@ -423,39 +408,42 @@ describe('Onyx.connect deliveries after the first one', () => {
     describe('throwing callbacks', () => {
         it('does not stop other subscribers from receiving values, and the thrower keeps receiving later writes', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: 1}});
-            const thrower = jest.fn(() => {
+            const thrower = jest.fn();
+            const sameKey = jest.fn();
+            const secondThrower = jest.fn();
+            const afterSecondThrower = jest.fn();
+            Onyx.connect({key: KEYS.PLAIN, callback: thrower});
+            Onyx.connect({key: KEYS.PLAIN, callback: sameKey});
+            Onyx.connect({key: KEYS.PLAIN, callback: secondThrower});
+            Onyx.connect({key: KEYS.PLAIN, callback: afterSecondThrower});
+            await waitForPromisesToResolve();
+            // A throw on the first delivery is pinned separately under the #834 change below.
+            thrower.mockImplementation(() => {
                 throw new Error('subscriber failure');
             });
-            const sameConnection = jest.fn();
-            const separateConnection = jest.fn();
-            const separateThrower = jest.fn(() => {
-                throw new Error('separate failure');
+            secondThrower.mockImplementation(() => {
+                throw new Error('second failure');
             });
-            const afterSeparateThrower = jest.fn();
-            Onyx.connect({key: KEYS.PLAIN, callback: thrower});
-            Onyx.connect({key: KEYS.PLAIN, callback: sameConnection});
-            Onyx.connect({key: KEYS.PLAIN, callback: separateThrower, reuseConnection: false});
-            Onyx.connect({key: KEYS.PLAIN, callback: separateConnection, reuseConnection: false});
-            Onyx.connect({key: KEYS.PLAIN, callback: afterSeparateThrower, reuseConnection: false});
-            await waitForPromisesToResolve();
 
             await Onyx.set(KEYS.PLAIN, 2);
+            await Onyx.set(KEYS.PLAIN, 3);
             await waitForPromisesToResolve();
 
-            expect(deliveredValues(thrower)).toEqual([1, 2]);
-            expect(deliveredValues(sameConnection)).toEqual([1, 2]);
-            expect(deliveredValues(separateConnection)).toEqual([1, 2]);
-            expect(deliveredValues(afterSeparateThrower)).toEqual([1, 2]);
+            expect(deliveredValues(thrower)).toEqual([1, 2, 3]);
+            expect(deliveredValues(sameKey)).toEqual([1, 2, 3]);
+            expect(deliveredValues(secondThrower)).toEqual([1, 2, 3]);
+            expect(deliveredValues(afterSecondThrower)).toEqual([1, 2, 3]);
         });
 
         it('does not stop member subscribers after a throwing root subscriber in a collection batch', async () => {
             const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
-            const root = jest.fn(() => {
-                throw new Error('root failure');
-            });
+            const root = jest.fn();
             const member = jest.fn();
             await connectAndSettle(() => Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: root}), root);
             await connectAndSettle(() => Onyx.connect({key: REPORT_1, callback: member}), member);
+            root.mockImplementation(() => {
+                throw new Error('root failure');
+            });
 
             await Onyx.mergeCollection(KEYS.COLLECTION.REPORT, {[REPORT_1]: {name: 'x'}});
             await waitForPromisesToResolve();
@@ -466,9 +454,9 @@ describe('Onyx.connect deliveries after the first one', () => {
     });
 
     describe('current behaviour (suspected bug)', () => {
-        // keyChanged hands its captured value to later subscriptions after a nested write already delivered a newer one,
-        // and the shared connection re-reads its cached value per callback, so it repeats the newer value.
-        it('delivers a stale value last to a separate connection when an earlier subscriber writes the same key from its callback', async () => {
+        // notifyKey hands its captured value to later listeners after a nested write already delivered a newer one.
+        // main ended the default shared connection on 2 ([2, 2]); only a reuseConnection: false connection ended on 1.
+        it('delivers a stale value last to later connections when an earlier subscriber writes the same key from its callback', async () => {
             const {Onyx, cache} = await startOnyx({storedValues: {[KEYS.PLAIN]: 0}});
             Onyx.connect({
                 key: KEYS.PLAIN,
@@ -479,21 +467,21 @@ describe('Onyx.connect deliveries after the first one', () => {
                     Onyx.set(KEYS.PLAIN, 2);
                 },
             });
-            const shared = jest.fn();
-            const separate = jest.fn();
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: shared}), shared);
-            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: separate, reuseConnection: false}), separate);
+            const first = jest.fn();
+            const second = jest.fn();
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: first}), first);
+            await connectAndSettle(() => Onyx.connect({key: KEYS.PLAIN, callback: second}), second);
 
             await Onyx.set(KEYS.PLAIN, 1);
             await waitForPromisesToResolve();
 
             expect(cache.get(KEYS.PLAIN)).toBe(2);
-            expect(deliveredValues(shared)).toEqual([2, 2]);
-            expect(deliveredValues(separate)).toEqual([2, 1]);
+            expect(deliveredValues(first)).toEqual([2, 1]);
+            expect(deliveredValues(second)).toEqual([2, 1]);
         });
 
-        // keyChanged memoizes one collection snapshot per dispatch, so a later root subscriber gets it after the nested newer one.
-        it('delivers a stale collection last to a separate root connection when an earlier root subscriber writes a member from its callback', async () => {
+        // The dispatch captures one collection snapshot, so a later root subscriber gets it after the nested newer one.
+        it('delivers a stale collection last to a later root connection when an earlier root subscriber writes a member from its callback', async () => {
             const {Onyx, cache} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
             Onyx.connect({
                 key: KEYS.COLLECTION.REPORT,
@@ -504,14 +492,14 @@ describe('Onyx.connect deliveries after the first one', () => {
                     Onyx.set(REPORT_3, {id: 3});
                 },
             });
-            const separate = jest.fn();
-            await connectAndSettle(() => Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: separate, reuseConnection: false}), separate);
+            const later = jest.fn();
+            await connectAndSettle(() => Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: later}), later);
 
             await Onyx.set(REPORT_2, {id: 2});
             await waitForPromisesToResolve();
 
             expect(Object.keys(cache.getCollectionData(KEYS.COLLECTION.REPORT) ?? {}).sort()).toEqual([REPORT_1, REPORT_2, REPORT_3]);
-            expect(deliveredValues(separate)).toEqual([
+            expect(deliveredValues(later)).toEqual([
                 {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}, [REPORT_3]: {id: 3}},
                 {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}},
             ]);
@@ -549,9 +537,11 @@ describe('Onyx.connect deliveries after the first one', () => {
             expect(deliveredValues(member)).toEqual([{id: 'a'}, {id: 'a', name: 'c'}, {id: 'a', name: 'b'}]);
             expect(cache.get(REPORT_1)).toEqual({id: 'a', name: 'b'});
         });
+    });
 
-        // A connect made inside a callback of the same shared connection is called by the running dispatch and again by the deferred late-joiner delivery.
-        it('delivers the same value twice to a subscriber that joins the shared connection from inside its dispatch', async () => {
+    describe('fixed by #834 (was a suspected bug)', () => {
+        // main called the joiner twice with 2: once from the running dispatch and once from the deferred late-joiner delivery.
+        it('delivers the value once to a subscriber that connects to the same key from inside a dispatch', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: 1}});
             const joiner = jest.fn();
             let hasJoined = false;
@@ -570,10 +560,66 @@ describe('Onyx.connect deliveries after the first one', () => {
             await Onyx.set(KEYS.PLAIN, 2);
             await waitForPromisesToResolve();
 
-            expect(joiner.mock.calls).toEqual([
-                [2, KEYS.PLAIN],
-                [2, KEYS.PLAIN],
+            expect(joiner.mock.calls).toEqual([[2, KEYS.PLAIN]]);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main passed undefined as the key argument of the first delivery: [undefined, undefined].
+        it('delivers the first write to a key that was missing at connect time', async () => {
+            const {Onyx} = await startOnyx();
+            const callback = jest.fn();
+            Onyx.connect({key: KEYS.PLAIN, callback});
+            await waitForPromisesToResolve();
+
+            await Onyx.set(KEYS.PLAIN, 'created');
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([
+                [undefined, KEYS.PLAIN],
+                ['created', KEYS.PLAIN],
             ]);
+        });
+
+        // main caught a throw on the first delivery as well and logged it via Logger.logAlert.
+        it('lets a throw on the first delivery escape unlogged, while a throw on a later write is caught and logged', async () => {
+            const {Onyx, OnyxUtils} = await startOnyx({storedValues: {[KEYS.PLAIN]: 1}});
+            const alerts: string[] = [];
+            Onyx.registerLogger(({level, message}) => {
+                if (level !== 'alert') {
+                    return;
+                }
+                alerts.push(message);
+            });
+            const escaped: unknown[] = [];
+            const scheduleInitialFire = OnyxUtils.scheduleInitialFire;
+            jest.spyOn(OnyxUtils, 'scheduleInitialFire').mockImplementation((key, fire) =>
+                scheduleInitialFire(key, () => {
+                    try {
+                        fire();
+                    } catch (error) {
+                        escaped.push(error);
+                    }
+                }),
+            );
+            const thrower = jest.fn(() => {
+                throw new Error('subscriber failure');
+            });
+            const other = jest.fn();
+            Onyx.connect({key: KEYS.PLAIN, callback: thrower});
+            Onyx.connect({key: KEYS.PLAIN, callback: other});
+            await waitForPromisesToResolve();
+
+            expect(escaped).toEqual([new Error('subscriber failure')]);
+            expect(alerts).toEqual([]);
+
+            await Onyx.set(KEYS.PLAIN, 2);
+            await waitForPromisesToResolve();
+
+            expect(escaped).toHaveLength(1);
+            expect(alerts).toEqual([`[Onyx] [OnyxSubscriptionManager] Listener threw an error for key '${KEYS.PLAIN}': Error: subscriber failure`]);
+            expect(deliveredValues(thrower)).toEqual([1, 2]);
+            expect(deliveredValues(other)).toEqual([1, 2]);
         });
     });
 });

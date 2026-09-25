@@ -37,7 +37,7 @@ function readStored(key: OnyxKey): Promise<unknown> {
     return SQLiteProvider.getItem(key);
 }
 
-/** Writes straight into SQLite, bypassing Onyx, to model a value persisted by an earlier session. */
+/** Writes straight into SQLite, bypassing Onyx and its cache. */
 function writeStored(key: OnyxKey, value: unknown): Promise<void> {
     return SQLiteProvider.setItem(key, value);
 }

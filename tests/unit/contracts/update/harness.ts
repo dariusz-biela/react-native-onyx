@@ -1,11 +1,9 @@
 import lodashCloneDeep from 'lodash/cloneDeep';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
 import type MockedStorage from '../../../../lib/storage/__mocks__';
-import type {OnyxKey, OnyxUpdate} from '../../../../lib/types';
+import type {Connection, OnyxKey, OnyxUpdate} from '../../../../lib/types';
 
 import Onyx from '../../../../lib';
 import cache from '../../../../lib/OnyxCache';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import Storage from '../../../../lib/storage';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
@@ -83,8 +81,6 @@ async function resetOnyx(): Promise<void> {
     }
     await Onyx.clear();
     await waitForPromisesToResolve();
-    onyxSnapshotCache.clear();
-    onyxSnapshotCache.clearSelectorIds();
     jest.clearAllMocks();
 }
 
@@ -119,23 +115,26 @@ function readStorage(): State {
     return state;
 }
 
-/** Puts a value in storage and in the key index but not in the value cache, the shape an evicted key has. */
+/** Puts a value in storage and in the key index but not in the value cache, the shape a key has when init hydration failed. */
 function seedColdKey(key: OnyxKey, value: unknown): void {
     StorageMock.getMockStore()[key] = deepClone(value);
     cache.addKey(key);
 }
 
-/** Seeds the state, leaving the keys picked by `isCold` in storage only. */
-async function seedPartlyCold(initial: State, isCold: () => boolean): Promise<void> {
+/** Seeds the state, leaving the keys picked by `isCold` in storage only, and returns both parts. */
+async function seedPartlyCold(initial: State, isCold: () => boolean): Promise<{warm: State; cold: State}> {
     const warm: State = {};
+    const cold: State = {};
     for (const [key, value] of Object.entries(initial)) {
         if (isCold()) {
             seedColdKey(key, value);
+            cold[key] = value;
         } else {
             warm[key] = value;
         }
     }
     await Onyx.multiSet(warm);
+    return {warm, cold};
 }
 
 /** Records every value a `connectWithoutView` callback receives. */
@@ -176,7 +175,7 @@ async function recordCollectionAfterInitial(collectionKey: OnyxKey): Promise<{ca
     return {calls, last: () => calls.at(-1)};
 }
 
-/** Reads a key through a fresh subscriber, the public read path that falls back from the cache to the storage. */
+/** Reads a key through a fresh subscriber, the public read path, which reads the cache only since #834. */
 async function readThroughConnection(key: OnyxKey): Promise<unknown> {
     let received: unknown;
     const connection = Onyx.connectWithoutView({

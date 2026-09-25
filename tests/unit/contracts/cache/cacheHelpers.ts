@@ -124,7 +124,7 @@ if (expect.getState().testPath === __filename) {
         it('rejects a missing snapshot', () => {
             const {cache} = loadFreshCache();
 
-            expect(() => readSnapshot(cache, COLLECTION.COLL)).toThrow();
+            expect(() => readSnapshot(cache, 'unregistered_')).toThrow();
         });
     });
 }

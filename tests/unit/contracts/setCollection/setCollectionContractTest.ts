@@ -342,6 +342,19 @@ describe('Onyx.setCollection contract', () => {
             expect(other.calls).toHaveLength(0);
         });
 
+        it('notifies a member subscriber of a nested collection that shares the prefix with undefined when setCollection removes it', async () => {
+            const nested = `${KEYS.COLLECTION.TEST_LEVEL}1`;
+            await Onyx.multiSet({[nested]: {name: 'nested'}, [`${KEYS.COLLECTION.TEST}1`]: {name: 'parent'}});
+            const nestedMember = record(nested);
+            await settle();
+            nestedMember.reset();
+
+            await Onyx.setCollection(KEYS.COLLECTION.TEST, {[`${KEYS.COLLECTION.TEST}2`]: {name: 'parent 2'}});
+
+            expect(OnyxCache.get(nested)).toBeUndefined();
+            expect(nestedMember.calls).toEqual([{value: undefined, key: nested}]);
+        });
+
         it('gives a subscriber that connects afterwards the new state', async () => {
             await seedRoutes();
             await Onyx.setCollection(ROUTES, {[A]: {name: 'A2'}, [D]: {name: 'D'}});
@@ -493,6 +506,16 @@ describe('Onyx.setCollection contract', () => {
             expect(storedWithPrefix(ROUTES)).toEqual({[A]: {name: 'A2'}});
         });
 
+        it('lets a setCollection issued after a merge of a new member in the same tick win', async () => {
+            await seedRoutes();
+
+            await Promise.all([Onyx.merge(D, {name: 'D'}), Onyx.setCollection(ROUTES, {[A]: {name: 'A2'}})]);
+            await settle();
+
+            expect(readCollection(ROUTES)).toEqual({[A]: {name: 'A2'}});
+            expect(storedWithPrefix(ROUTES)).toEqual({[A]: {name: 'A2'}});
+        });
+
         it('settles on the second collection when a collection subscriber replaces it again while notified', async () => {
             await seedRoutes();
             let replaced = false;
@@ -585,22 +608,20 @@ describe('Onyx.setCollection contract', () => {
     });
 
     describe('current behaviour (suspected bug)', () => {
-        it('removes members of a nested collection that shares the prefix, without notifying their subscribers', async () => {
+        it('removes members of a nested collection that shares the prefix, without notifying the nested collection subscribers', async () => {
             const nested = `${KEYS.COLLECTION.TEST_LEVEL}1`;
             await Onyx.multiSet({[nested]: {name: 'nested'}, [`${KEYS.COLLECTION.TEST}1`]: {name: 'parent'}});
             const nestedCollection = record(KEYS.COLLECTION.TEST_LEVEL);
-            const nestedMember = record(nested);
             await settle();
             nestedCollection.reset();
-            nestedMember.reset();
 
             await Onyx.setCollection(KEYS.COLLECTION.TEST, {[`${KEYS.COLLECTION.TEST}2`]: {name: 'parent 2'}});
 
             expect(OnyxCache.get(nested)).toBeUndefined();
             expect(storedWithPrefix(KEYS.COLLECTION.TEST_LEVEL)).toEqual({});
+            expect(readCollection(KEYS.COLLECTION.TEST_LEVEL)).toEqual({});
             expect(readCollection(KEYS.COLLECTION.TEST)).toEqual({[`${KEYS.COLLECTION.TEST}2`]: {name: 'parent 2'}});
             expect(nestedCollection.calls).toHaveLength(0);
-            expect(nestedMember.calls).toHaveLength(0);
         });
 
         it('accepts a nested collection member in a parent collection call without notifying its subscribers', async () => {
@@ -654,16 +675,6 @@ describe('Onyx.setCollection contract', () => {
             expect(readCollection(ROUTES)).toEqual({[A]: {name: 'A2'}, [B]: {name: 'B', extra: 1}});
             expect(storedWithPrefix(ROUTES)).toEqual({[A]: {name: 'A2'}, [B]: {name: 'B', extra: 1}});
             expect(memberB.values()).toEqual([undefined, {name: 'B', extra: 1}]);
-        });
-
-        it('keeps a new member merged just before setCollection in the same tick', async () => {
-            await seedRoutes();
-
-            await Promise.all([Onyx.merge(D, {name: 'D'}), Onyx.setCollection(ROUTES, {[A]: {name: 'A2'}})]);
-            await settle();
-
-            expect(readCollection(ROUTES)).toEqual({[A]: {name: 'A2'}, [D]: {name: 'D'}});
-            expect(storedWithPrefix(ROUTES)).toEqual({[A]: {name: 'A2'}, [D]: {name: 'D'}});
         });
 
         it('keeps a member re-written by a subscriber during its removal notification in the cache but deletes it from storage', async () => {

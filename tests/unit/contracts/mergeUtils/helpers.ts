@@ -2,8 +2,7 @@
  * Shared setup for the contract tests of the merge helpers in `OnyxUtils` (`mergeChanges`, `mergeAndMarkChanges`,
  * `prepareKeyValuePairsForStorage` and `updateSnapshots`), plus a small independent model of `mergeChanges`.
  */
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
-import type {OnyxKey} from '../../../../lib/types';
+import type {Connection, OnyxKey} from '../../../../lib/types';
 
 import Onyx from '../../../../lib';
 import OnyxUtils from '../../../../lib/OnyxUtils';
@@ -46,7 +45,6 @@ async function recordAfterInitial(key: OnyxKey): Promise<unknown[]> {
     openConnections.push(
         Onyx.connect({
             key,
-            reuseConnection: false,
             callback: (value: unknown) => {
                 if (!isInitialDelivered) {
                     return;

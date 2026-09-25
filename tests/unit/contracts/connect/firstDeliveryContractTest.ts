@@ -34,7 +34,7 @@ describe('Onyx.connect first delivery', () => {
 
             expect(plainCallback.mock.calls).toEqual([['value', KEYS.PLAIN]]);
             expect(collectionCallback.mock.calls).toEqual([[{[REPORT_1]: {id: 1}}, KEYS.COLLECTION.REPORT]]);
-            expect(missingCallback.mock.calls).toEqual([[undefined, undefined]]);
+            expect(missingCallback.mock.calls).toEqual([[undefined, KEYS.PLAIN_2]]);
         });
 
         it('never fires the callback synchronously inside connect, so the returned connection is usable in the callback', async () => {
@@ -44,7 +44,7 @@ describe('Onyx.connect first delivery', () => {
             const connection = Onyx.connect({key: KEYS.PLAIN, callback});
 
             expect(callback).not.toHaveBeenCalled();
-            expect(connection).toEqual({id: expect.any(String), callbackID: expect.any(String)});
+            expect(connection).toEqual({unsubscribe: expect.any(Function)});
 
             await waitForPromisesToResolve();
             expect(callback).toHaveBeenCalledTimes(1);
@@ -58,47 +58,6 @@ describe('Onyx.connect first delivery', () => {
             await waitForPromisesToResolve();
 
             expect(callback.mock.calls[0][0]).toBe(cache.get(KEYS.PLAIN));
-        });
-
-        it('reads a cold value from storage when the key is indexed but its value was evicted, and caches it', async () => {
-            const {Onyx, cache, storage} = await startOnyx({storedValues: {[KEYS.PLAIN]: {stale: true}}});
-            cache.drop(KEYS.PLAIN);
-            cache.addKey(KEYS.PLAIN);
-            await storage.setItem(KEYS.PLAIN, {fromStorage: true});
-            const callback = jest.fn();
-
-            Onyx.connect({key: KEYS.PLAIN, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[{fromStorage: true}, KEYS.PLAIN]]);
-            expect(cache.get(KEYS.PLAIN)).toEqual({fromStorage: true});
-        });
-
-        it('delivers the same cold value to concurrent connections on the same evicted key', async () => {
-            const {Onyx, cache} = await startOnyx({storedValues: {[KEYS.PLAIN]: {id: 'cold'}}});
-            cache.drop(KEYS.PLAIN);
-            cache.addKey(KEYS.PLAIN);
-            const shared = jest.fn();
-            const separate = jest.fn();
-
-            Onyx.connect({key: KEYS.PLAIN, callback: shared});
-            Onyx.connect({key: KEYS.PLAIN, callback: separate, reuseConnection: false});
-            await waitForPromisesToResolve();
-
-            expect(shared.mock.calls).toEqual([[{id: 'cold'}, KEYS.PLAIN]]);
-            expect(separate.mock.calls).toEqual([[{id: 'cold'}, KEYS.PLAIN]]);
-        });
-
-        it('delivers undefined for both arguments when the key does not exist anywhere', async () => {
-            const {Onyx, cache} = await startOnyx({storedValues: {[KEYS.PLAIN_2]: 'other'}});
-            const callback = jest.fn();
-
-            Onyx.connect({key: KEYS.PLAIN, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[undefined, undefined]]);
-            expect(cache.hasCacheForKey(KEYS.PLAIN)).toBe(true);
-            expect(cache.get(KEYS.PLAIN)).toBeUndefined();
         });
 
         it('delivers undefined with the key when storage holds null for the key', async () => {
@@ -170,28 +129,6 @@ describe('Onyx.connect first delivery', () => {
             expect(callback.mock.calls).toEqual([[{id: 1}, REPORT_1]]);
         });
 
-        it('delivers undefined for both arguments when the member does not exist', async () => {
-            const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
-            const callback = jest.fn();
-
-            Onyx.connect({key: `${KEYS.COLLECTION.REPORT}999`, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[undefined, undefined]]);
-        });
-
-        it('reads an evicted member from storage', async () => {
-            const {Onyx, cache} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
-            cache.drop(REPORT_1);
-            cache.addKey(REPORT_1);
-            const callback = jest.fn();
-
-            Onyx.connect({key: REPORT_1, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[{id: 1}, REPORT_1]]);
-        });
-
         it('delivers undefined for a member whose ID is configured as skippable', async () => {
             const {Onyx} = await startOnyx({
                 storedValues: {[`${KEYS.COLLECTION.REPORT}skip`]: {id: 'skip'}, [REPORT_1]: {id: 1}},
@@ -204,7 +141,7 @@ describe('Onyx.connect first delivery', () => {
             Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: collectionCallback});
             await waitForPromisesToResolve();
 
-            expect(memberCallback.mock.calls).toEqual([[undefined, undefined]]);
+            expect(memberCallback.mock.calls).toEqual([[undefined, `${KEYS.COLLECTION.REPORT}skip`]]);
             expect(collectionCallback.mock.calls).toEqual([[{[REPORT_1]: {id: 1}}, KEYS.COLLECTION.REPORT]]);
         });
     });
@@ -251,28 +188,6 @@ describe('Onyx.connect first delivery', () => {
             expect(collection[REPORT_2]).toBe(cache.get(REPORT_2));
             expect(Object.isFrozen(collection)).toBe(true);
         });
-
-        it('includes evicted members after reading them from storage', async () => {
-            const {Onyx, cache} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}});
-            cache.drop(REPORT_1);
-            cache.addKey(REPORT_1);
-            const callback = jest.fn();
-
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[{[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}, KEYS.COLLECTION.REPORT]]);
-        });
-
-        it('delivers a collection whose members are all stored as null as undefined', async () => {
-            const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: null}});
-            const callback = jest.fn();
-
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback});
-            await waitForPromisesToResolve();
-
-            expect(callback.mock.calls).toEqual([[undefined, KEYS.COLLECTION.REPORT]]);
-        });
     });
 
     describe('connections made before Onyx.init resolves', () => {
@@ -299,7 +214,7 @@ describe('Onyx.connect first delivery', () => {
             expect(plainCallback.mock.calls).toEqual([[{hydrated: true}, KEYS.PLAIN]]);
             expect(collectionCallback.mock.calls).toEqual([[{[REPORT_1]: {id: 1}}, KEYS.COLLECTION.REPORT]]);
             expect(memberCallback.mock.calls).toEqual([[{id: 1}, REPORT_1]]);
-            expect(missingCallback.mock.calls).toEqual([[undefined, undefined]]);
+            expect(missingCallback.mock.calls).toEqual([[undefined, KEYS.PLAIN_2]]);
         });
 
         it('deliver an initialKeyStates default exactly once', async () => {
@@ -389,20 +304,32 @@ describe('Onyx.connect first delivery', () => {
 
             expect(callback.mock.calls).toEqual([[{stored: 0, fromDefault: true}, KEYS.WITH_DEFAULT]]);
         });
-
-        // The callback type promises a non-undefined collection, but an empty collection delivers undefined.
-        it('delivers undefined instead of an empty object for a collection with no members', async () => {
+    });
+    describe('fixed by #834 (were suspected bugs)', () => {
+        // main delivered undefined, although the callback type promises a collection object.
+        it('delivers an empty object for a collection with no members', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: 'unrelated'}});
             const callback = jest.fn();
 
             Onyx.connect({key: KEYS.COLLECTION.EMPTY, callback});
             await waitForPromisesToResolve();
 
-            expect(callback.mock.calls).toEqual([[undefined, KEYS.COLLECTION.EMPTY]]);
+            expect(callback.mock.calls).toEqual([[{}, KEYS.COLLECTION.EMPTY]]);
         });
 
-        // The update's keyChanged delivers first, then the pending first delivery repeats it with the "missing key" undefined key.
-        it('delivers an Onyx.update set issued right after init twice, the second time without the key, when storage has no value', async () => {
+        // main delivered undefined here as well.
+        it('delivers an empty object for a collection whose members are all stored as null', async () => {
+            const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: null}});
+            const callback = jest.fn();
+
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[{}, KEYS.COLLECTION.REPORT]]);
+        });
+
+        // main delivered it twice: ['updated', 'plain'], then ['updated', undefined] from the pending first delivery.
+        it('delivers an Onyx.update set issued right after init once, with the key, when storage has no value', async () => {
             const modules = loadFreshOnyx();
             const callback = jest.fn();
 
@@ -411,10 +338,91 @@ describe('Onyx.connect first delivery', () => {
             modules.Onyx.update([{onyxMethod: 'set', key: KEYS.PLAIN, value: 'updated'}]);
             await waitForPromisesToResolve();
 
-            expect(callback.mock.calls).toEqual([
-                ['updated', KEYS.PLAIN],
-                ['updated', undefined],
-            ]);
+            expect(callback.mock.calls).toEqual([['updated', KEYS.PLAIN]]);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main passed undefined as the key argument: [[undefined, undefined]].
+        it('delivers undefined and the key when the key does not exist anywhere, without caching it', async () => {
+            const {Onyx, cache} = await startOnyx({storedValues: {[KEYS.PLAIN_2]: 'other'}});
+            const callback = jest.fn();
+
+            Onyx.connect({key: KEYS.PLAIN, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
+            // main also cached the missing key as undefined after its storage read, so hasCacheForKey was true.
+            expect(cache.hasCacheForKey(KEYS.PLAIN)).toBe(false);
+            expect(cache.get(KEYS.PLAIN)).toBeUndefined();
+        });
+
+        // main passed undefined as the key argument: [[undefined, undefined]].
+        it('delivers undefined and the member key when the member does not exist', async () => {
+            const {Onyx} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
+            const callback = jest.fn();
+
+            Onyx.connect({key: `${KEYS.COLLECTION.REPORT}999`, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[undefined, `${KEYS.COLLECTION.REPORT}999`]]);
+        });
+
+        // main read the evicted value from storage, delivered {fromStorage: true} and cached it.
+        it('delivers undefined for a key that is indexed but whose value was evicted, without reading storage', async () => {
+            const {Onyx, cache, storage} = await startOnyx({storedValues: {[KEYS.PLAIN]: {stale: true}}});
+            cache.drop(KEYS.PLAIN);
+            cache.addKey(KEYS.PLAIN);
+            await storage.setItem(KEYS.PLAIN, {fromStorage: true});
+            const callback = jest.fn();
+
+            Onyx.connect({key: KEYS.PLAIN, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
+            expect(cache.get(KEYS.PLAIN)).toBeUndefined();
+        });
+
+        // main delivered {id: 'cold'} from storage to both connections.
+        it('delivers undefined to concurrent connections on the same evicted key', async () => {
+            const {Onyx, cache} = await startOnyx({storedValues: {[KEYS.PLAIN]: {id: 'cold'}}});
+            cache.drop(KEYS.PLAIN);
+            cache.addKey(KEYS.PLAIN);
+            const first = jest.fn();
+            const second = jest.fn();
+
+            Onyx.connect({key: KEYS.PLAIN, callback: first});
+            Onyx.connect({key: KEYS.PLAIN, callback: second});
+            await waitForPromisesToResolve();
+
+            expect(first.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
+            expect(second.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
+        });
+
+        // main read the evicted member from storage and delivered {id: 1}.
+        it('delivers undefined for an evicted member', async () => {
+            const {Onyx, cache} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}}});
+            cache.drop(REPORT_1);
+            cache.addKey(REPORT_1);
+            const callback = jest.fn();
+
+            Onyx.connect({key: REPORT_1, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[undefined, REPORT_1]]);
+        });
+
+        // main read evicted members from storage and included them in the collection.
+        it('leaves evicted members out of a collection delivery', async () => {
+            const {Onyx, cache} = await startOnyx({storedValues: {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}});
+            cache.drop(REPORT_1);
+            cache.addKey(REPORT_1);
+            const callback = jest.fn();
+
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback});
+            await waitForPromisesToResolve();
+
+            expect(callback.mock.calls).toEqual([[{[REPORT_2]: {id: 2}}, KEYS.COLLECTION.REPORT]]);
         });
     });
 });

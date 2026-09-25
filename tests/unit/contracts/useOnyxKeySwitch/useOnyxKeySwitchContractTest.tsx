@@ -3,7 +3,6 @@ import {act, render, renderHook} from '@testing-library/react-native';
 import Onyx, {useOnyx} from '../../../../lib';
 import StorageMock from '../../../../lib/storage';
 import cache from '../../../../lib/OnyxCache';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import type {FetchStatus, UseOnyxResult} from '../../../../lib/useOnyx';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
@@ -146,7 +145,6 @@ async function settle() {
 
 beforeEach(async () => {
     await Onyx.clear();
-    onyxSnapshotCache.clear();
 });
 
 describe('useOnyx key switching contract', () => {
@@ -320,70 +318,6 @@ describe('useOnyx key switching contract', () => {
     });
 
     describe('switching to a cold key', () => {
-        it('settles on undefined and loaded for a key without data and never shows the previous key data', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const switchStart = log.entries.length;
-            rerender(coldKey);
-            expect(result.current[0]).toBeUndefined();
-            await settle();
-
-            const afterSwitch = log.since(switchStart);
-            expectValidRenders(afterSwitch);
-            expect(afterSwitch.every((entry) => entry.key === coldKey && entry.value === undefined)).toBe(true);
-            expect(afterSwitch.map((entry) => entry.status)).toContain('loading');
-            expect(afterSwitch.length).toBeLessThanOrEqual(3);
-            expect(result.current[0]).toBeUndefined();
-            expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('delivers a value that only exists in storage after the switch, preceded by loading', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await seedColdKey(coldKey, owned(coldKey));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const switchStart = log.entries.length;
-            rerender(coldKey);
-            await settle();
-
-            const afterSwitch = log.since(switchStart);
-            expectValidRenders(afterSwitch);
-            expect(afterSwitch.length).toBeLessThanOrEqual(3);
-            const firstLoading = afterSwitch.findIndex((entry) => entry.status === 'loading');
-            const firstValue = afterSwitch.findIndex((entry) => entry.value !== undefined);
-            expect(firstLoading).toBeGreaterThanOrEqual(0);
-            expect(firstValue).toBeGreaterThan(firstLoading);
-            expect(afterSwitch.slice(firstValue).every((entry) => entry.status === 'loaded')).toBe(true);
-            expect(result.current[0]).toEqual(owned(coldKey));
-            expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('never leaks the previous key value when switching before the previous cold key finished loading', async () => {
-            const firstColdKey = nextColdKey();
-            const secondColdKey = nextColdKey();
-            await seedColdKey(firstColdKey, owned(firstColdKey));
-            await seedColdKey(secondColdKey, owned(secondColdKey));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: firstColdKey});
-
-            rerender(secondColdKey);
-            await settle();
-            await settle();
-
-            expectValidRenders(log.entries);
-            expect(log.entries.some((entry) => isOwnedValue(entry.value) && entry.value.owner === firstColdKey)).toBe(false);
-            expect(log.entries.length).toBeLessThanOrEqual(4);
-            expect(result.current[0]).toEqual(owned(secondColdKey));
-            expect(result.current[1].status).toBe('loaded');
-        });
-
         it('settles on the first key when switching to a cold key and back within one tick', async () => {
             const coldKey = nextColdKey();
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
@@ -430,49 +364,6 @@ describe('useOnyx key switching contract', () => {
             expect(afterSwitch.filter((entry) => entry.status === 'loading').every((entry) => entry.selected === undefined)).toBe(true);
             expect(result.current[0]).toBe('none');
             expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('delivers the same value to a hook switching onto a key that another hook is still loading', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await seedColdKey(coldKey, owned(coldKey));
-            const {result: switching, rerender} = renderHook((key: string) => useOnyx(key), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const {result: loadingReader} = renderHook(() => useOnyx(coldKey));
-            rerender(coldKey);
-            await settle();
-
-            expect(loadingReader.current[0]).toEqual(owned(coldKey));
-            expect(switching.current[0]).toBe(loadingReader.current[0]);
-            expect(switching.current[1].status).toBe('loaded');
-            expect(loadingReader.current[1].status).toBe('loaded');
-        });
-
-        it('switches keys the same way with reuseConnection disabled', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
-            await seedColdKey(coldKey, owned(coldKey));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key, {reuseConnection: false})), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            rerender(ONYXKEYS.KEY_B);
-            expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_B));
-            await settle();
-            rerender(coldKey);
-            await settle();
-
-            expectValidRenders(log.entries);
-            expect(result.current[0]).toEqual(owned(coldKey));
-            expect(result.current[1].status).toBe('loaded');
-
-            const rendersBefore = log.entries.length;
-            await act(async () => Onyx.merge(ONYXKEYS.KEY_B, {rev: 2}));
-            expect(log.entries.length).toBe(rendersBefore);
-            await act(async () => Onyx.merge(coldKey, {rev: 2}));
-            expect(result.current[0]).toEqual(owned(coldKey, 2));
         });
     });
 
@@ -620,24 +511,6 @@ describe('useOnyx key switching contract', () => {
             expect(afterSwitch.length).toBeLessThanOrEqual(3);
             expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_B, 2));
             expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('never shows a write to the previous key made while the switch is in progress', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await seedColdKey(coldKey, owned(coldKey));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            rerender(coldKey);
-            Onyx.merge(ONYXKEYS.KEY_A, {rev: 2});
-            Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A, 3));
-            await settle();
-
-            expectValidRenders(log.entries);
-            expect(revisionsOf(log.entries.filter((entry) => entry.key === ONYXKEYS.KEY_A))).toEqual([1]);
-            expect(result.current[0]).toEqual(owned(coldKey));
         });
 
         it('settles on the last of interleaved writes to both keys made before the new connection settles', async () => {
@@ -882,26 +755,6 @@ describe('useOnyx key switching contract', () => {
             Onyx.disconnect(connection);
         });
 
-        it('never shows the pre-merge value when returning to a key with a pending merge before the other key connected', async () => {
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            rerender(ONYXKEYS.KEY_B);
-            const returnStart = log.entries.length;
-            Onyx.merge(ONYXKEYS.KEY_A, {rev: 2});
-            rerender(ONYXKEYS.KEY_A);
-            await settle();
-
-            const afterReturn = log.since(returnStart);
-            expectValidRenders(afterReturn);
-            expect(revisionsOf(afterReturn)).not.toContain(1);
-            expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_A, 2));
-            expect(result.current[1].status).toBe('loaded');
-        });
-
         it('stays loaded when the selector changes while a merge on the current key is pending', async () => {
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
             const renders: Array<{selected: unknown; status: FetchStatus}> = [];
@@ -942,28 +795,6 @@ describe('useOnyx key switching contract', () => {
             expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_A, 3));
         });
 
-        it('never shows the pre-merge value when switching onto a key with a pending merge that no other hook reads', async () => {
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const switchStart = log.entries.length;
-            Onyx.merge(ONYXKEYS.KEY_B, {rev: 2});
-            rerender(ONYXKEYS.KEY_B);
-            expect(result.current[0]).toBeUndefined();
-            expect(result.current[1].status).toBe('loading');
-            await settle();
-
-            const afterSwitch = log.since(switchStart);
-            expectValidRenders(afterSwitch);
-            expect(revisionsOf(afterSwitch)).not.toContain(1);
-            expect(afterSwitch.length).toBeLessThanOrEqual(3);
-            expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_B, 2));
-            expect(result.current[1].status).toBe('loaded');
-        });
-
         it('applies every queued merge on the switch target', async () => {
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
             await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
@@ -977,49 +808,6 @@ describe('useOnyx key switching contract', () => {
             await settle();
 
             expect(result.current[0]).toEqual({owner: ONYXKEYS.KEY_B, rev: 2, x: 3, y: 2});
-            expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('never shows the removed value when a pending merge removes the switch target', async () => {
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const switchStart = log.entries.length;
-            Onyx.merge(ONYXKEYS.KEY_B, null);
-            rerender(ONYXKEYS.KEY_B);
-            await settle();
-
-            const afterSwitch = log.since(switchStart);
-            expectValidRenders(afterSwitch);
-            expect(afterSwitch.every((entry) => entry.value === undefined)).toBe(true);
-            expect(result.current[0]).toBeUndefined();
-
-            await act(async () => Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B, 2)));
-            expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_B, 2));
-            expect(result.current[1].status).toBe('loaded');
-        });
-
-        it('merges a pending change onto a value that only exists in storage when switching onto it', async () => {
-            const coldKey = nextColdKey();
-            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
-            await seedColdKey(coldKey, {...owned(coldKey), kept: true});
-            const log = createRenderLog();
-            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-
-            const switchStart = log.entries.length;
-            Onyx.merge(coldKey, {rev: 2});
-            rerender(coldKey);
-            await settle();
-
-            const afterSwitch = log.since(switchStart);
-            expectValidRenders(afterSwitch);
-            expectNonDecreasing(revisionsOf(afterSwitch));
-            expect(afterSwitch.length).toBeLessThanOrEqual(3);
-            expect(result.current[0]).toEqual({owner: coldKey, rev: 2, kept: true});
             expect(result.current[1].status).toBe('loaded');
         });
 
@@ -1057,31 +845,185 @@ describe('useOnyx key switching contract', () => {
             expect(result.current[0]).toBeUndefined();
             expect(result.current[1].status).toBe('loaded');
         });
+
+        it('stays loading through a parent re-render until a pending merge onto a key without data lands', async () => {
+            const log = createRenderLog();
+            Onyx.merge(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            const {result, rerender} = renderHook(() => log.record(ONYXKEYS.KEY_A, useOnyx(ONYXKEYS.KEY_A)));
+            rerender(undefined);
+            await settle();
+
+            expect(log.entries).toEqual([
+                {key: ONYXKEYS.KEY_A, value: undefined, status: 'loading'},
+                {key: ONYXKEYS.KEY_A, value: undefined, status: 'loading'},
+                {key: ONYXKEYS.KEY_A, value: owned(ONYXKEYS.KEY_A), status: 'loaded'},
+            ]);
+            expect(result.current).toEqual([owned(ONYXKEYS.KEY_A), {status: 'loaded'}]);
+        });
+
+        it('settles on undefined and loaded after a pending merge that removes the key, on mount and on switch', async () => {
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
+            Onyx.merge(ONYXKEYS.KEY_A, null);
+            const mountLog = createRenderLog();
+            renderHook(() => mountLog.record(ONYXKEYS.KEY_A, useOnyx(ONYXKEYS.KEY_A)));
+            await settle();
+            await settle();
+            expect(mountLog.entries).toEqual([
+                {key: ONYXKEYS.KEY_A, value: owned(ONYXKEYS.KEY_A), status: 'loaded'},
+                {key: ONYXKEYS.KEY_A, value: undefined, status: 'loaded'},
+            ]);
+
+            await act(async () => Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A, 2)));
+            const switchLog = createRenderLog();
+            const {rerender} = renderHook((key: string) => switchLog.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+            const switchStart = switchLog.entries.length;
+            Onyx.merge(ONYXKEYS.KEY_B, null);
+            rerender(ONYXKEYS.KEY_B);
+            await settle();
+            await settle();
+            expect(switchLog.since(switchStart)).toEqual([
+                {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B), status: 'loaded'},
+                {key: ONYXKEYS.KEY_B, value: undefined, status: 'loaded'},
+            ]);
+        });
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        // The first render after switching to a cold key reports 'loaded' with no value, then drops back to 'loading'.
-        it('reports a cold key as loaded without a value before it reports loading', async () => {
+    describe('current behaviour (#834 change)', () => {
+        // On main the render after the switch reported loading until storage was checked, then loaded.
+        it('reports a key without data as loaded without a value in every render after the switch', async () => {
+            const coldKey = nextColdKey();
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            const switchStart = log.entries.length;
+            rerender(coldKey);
+            expect(result.current).toEqual([undefined, {status: 'loaded'}]);
+            await settle();
+
+            expect(log.since(switchStart)).toEqual([{key: coldKey, value: undefined, status: 'loaded'}]);
+        });
+
+        // On main the switch rendered [undefined, loaded], [undefined, loading] and then the stored value as loaded.
+        it('never delivers a value that only exists in storage after the switch and reports loaded without a value', async () => {
             const coldKey = nextColdKey();
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
             await seedColdKey(coldKey, owned(coldKey));
             const log = createRenderLog();
-            const {rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
             await settle();
 
             const switchStart = log.entries.length;
             rerender(coldKey);
             await settle();
 
-            expect(log.since(switchStart)).toEqual([
+            expect(log.since(switchStart)).toEqual([{key: coldKey, value: undefined, status: 'loaded'}]);
+            expect(result.current).toEqual([undefined, {status: 'loaded'}]);
+        });
+
+        // On main the hook ended on the stored value of the second cold key.
+        it('ends on undefined and loaded when switching between two keys that only exist in storage', async () => {
+            const firstColdKey = nextColdKey();
+            const secondColdKey = nextColdKey();
+            await seedColdKey(firstColdKey, owned(firstColdKey));
+            await seedColdKey(secondColdKey, owned(secondColdKey));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: firstColdKey});
+
+            rerender(secondColdKey);
+            await settle();
+            await settle();
+
+            expect(log.entries).toEqual([
+                {key: firstColdKey, value: undefined, status: 'loaded'},
+                {key: secondColdKey, value: undefined, status: 'loaded'},
+            ]);
+            expect(result.current).toEqual([undefined, {status: 'loaded'}]);
+        });
+
+        // On main both hooks ended on the stored value, sharing one reference.
+        it('gives a hook switching onto a storage-only key and a hook mounted on it the same undefined and loaded result', async () => {
+            const coldKey = nextColdKey();
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await seedColdKey(coldKey, owned(coldKey));
+            const {result: switching, rerender} = renderHook((key: string) => useOnyx(key), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            const {result: mounted} = renderHook(() => useOnyx(coldKey));
+            rerender(coldKey);
+            await settle();
+
+            expect(mounted.current).toEqual([undefined, {status: 'loaded'}]);
+            expect(switching.current).toEqual([undefined, {status: 'loaded'}]);
+        });
+
+        // On main the hook ended on the stored value of the cold key; the previous key writes were hidden as they still are.
+        it('hides writes to the previous key made during the switch and ends on undefined for a storage-only target', async () => {
+            const coldKey = nextColdKey();
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await seedColdKey(coldKey, owned(coldKey));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            rerender(coldKey);
+            Onyx.merge(ONYXKEYS.KEY_A, {rev: 2});
+            Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A, 3));
+            await settle();
+
+            expect(log.entries).toEqual([
+                {key: ONYXKEYS.KEY_A, value: owned(ONYXKEYS.KEY_A), status: 'loaded'},
                 {key: coldKey, value: undefined, status: 'loaded'},
-                {key: coldKey, value: undefined, status: 'loading'},
-                {key: coldKey, value: owned(coldKey), status: 'loaded'},
+            ]);
+            expect(result.current).toEqual([undefined, {status: 'loaded'}]);
+        });
+
+        // On main the return rendered only rev 2: the pre-merge value was hidden behind loading.
+        it('shows the cached pre-merge value as loaded when returning to a key with a pending merge, then the merged value', async () => {
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            rerender(ONYXKEYS.KEY_B);
+            const returnStart = log.entries.length;
+            Onyx.merge(ONYXKEYS.KEY_A, {rev: 2});
+            rerender(ONYXKEYS.KEY_A);
+            await settle();
+
+            expect(log.since(returnStart)).toEqual([
+                {key: ONYXKEYS.KEY_A, value: owned(ONYXKEYS.KEY_A), status: 'loaded'},
+                {key: ONYXKEYS.KEY_A, value: owned(ONYXKEYS.KEY_A, 2), status: 'loaded'},
+            ]);
+            expect(result.current).toEqual([owned(ONYXKEYS.KEY_A, 2), {status: 'loaded'}]);
+        });
+
+        // On main the switch rendered [undefined, loading] until the merge was applied.
+        it('shows the cached pre-merge value as loaded when switching onto a key with a pending merge that no other hook reads', async () => {
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            const switchStart = log.entries.length;
+            Onyx.merge(ONYXKEYS.KEY_B, {rev: 2});
+            rerender(ONYXKEYS.KEY_B);
+            expect(result.current).toEqual([owned(ONYXKEYS.KEY_B), {status: 'loaded'}]);
+            await settle();
+
+            expect(log.since(switchStart)).toEqual([
+                {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B), status: 'loaded'},
+                {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B, 2), status: 'loaded'},
             ]);
         });
 
-        // The pending-merge 'loading' rule is skipped when another hook already reads the key, so the stale value shows.
-        it('shows the pre-merge value as loaded when switching onto a key with a pending merge that another hook reads', async () => {
+        // On main the pre-merge value rendered twice as loaded before the merged value.
+        it('shows the cached pre-merge value once as loaded when switching onto a key with a pending merge that another hook reads', async () => {
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
             await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
             renderHook(() => useOnyx(ONYXKEYS.KEY_B));
@@ -1096,36 +1038,52 @@ describe('useOnyx key switching contract', () => {
 
             expect(log.since(switchStart)).toEqual([
                 {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B), status: 'loaded'},
-                {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B), status: 'loaded'},
                 {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B, 2), status: 'loaded'},
             ]);
-            expect(result.current[0]).toEqual(owned(ONYXKEYS.KEY_B, 2));
+            expect(result.current).toEqual([owned(ONYXKEYS.KEY_B, 2), {status: 'loaded'}]);
         });
 
-        // A merge to null that is pending when the hook connects leaves the status at 'loading' until the next write.
-        it('stays loading after a pending merge that removes the key settles on mount and on switch', async () => {
+        // On main every render after the switch had no value: the value being removed was never shown.
+        it('shows the cached value as loaded when switching onto a key a pending merge removes, then undefined', async () => {
             await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
             await Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B));
-            Onyx.merge(ONYXKEYS.KEY_A, null);
-            const mountLog = createRenderLog();
-            renderHook(() => mountLog.record(ONYXKEYS.KEY_A, useOnyx(ONYXKEYS.KEY_A)));
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
             await settle();
-            await settle();
-            expect(mountLog.entries).toEqual([{key: ONYXKEYS.KEY_A, value: undefined, status: 'loading'}]);
 
-            await act(async () => Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A, 2)));
-            const switchLog = createRenderLog();
-            const {rerender} = renderHook((key: string) => switchLog.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
-            await settle();
-            const switchStart = switchLog.entries.length;
+            const switchStart = log.entries.length;
             Onyx.merge(ONYXKEYS.KEY_B, null);
             rerender(ONYXKEYS.KEY_B);
             await settle();
-            await settle();
-            expect(switchLog.since(switchStart)).toEqual([
-                {key: ONYXKEYS.KEY_B, value: undefined, status: 'loading'},
-                {key: ONYXKEYS.KEY_B, value: undefined, status: 'loading'},
+
+            expect(log.since(switchStart)).toEqual([
+                {key: ONYXKEYS.KEY_B, value: owned(ONYXKEYS.KEY_B), status: 'loaded'},
+                {key: ONYXKEYS.KEY_B, value: undefined, status: 'loaded'},
             ]);
+
+            await act(async () => Onyx.set(ONYXKEYS.KEY_B, owned(ONYXKEYS.KEY_B, 2)));
+            expect(result.current).toEqual([owned(ONYXKEYS.KEY_B, 2), {status: 'loaded'}]);
+        });
+
+        // On main the merge landed on the stored value and the hook ended on {owner, rev: 2, kept: true}.
+        it('merges a pending change onto nothing instead of the stored value when switching onto a storage-only key', async () => {
+            const coldKey = nextColdKey();
+            await Onyx.set(ONYXKEYS.KEY_A, owned(ONYXKEYS.KEY_A));
+            await seedColdKey(coldKey, {...owned(coldKey), kept: true});
+            const log = createRenderLog();
+            const {result, rerender} = renderHook((key: string) => log.record(key, useOnyx(key)), {initialProps: ONYXKEYS.KEY_A});
+            await settle();
+
+            const switchStart = log.entries.length;
+            Onyx.merge(coldKey, {rev: 2});
+            rerender(coldKey);
+            await settle();
+
+            expect(log.since(switchStart)).toEqual([
+                {key: coldKey, value: undefined, status: 'loading'},
+                {key: coldKey, value: {rev: 2}, status: 'loaded'},
+            ]);
+            expect(result.current).toEqual([{rev: 2}, {status: 'loaded'}]);
         });
     });
 });

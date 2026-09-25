@@ -183,7 +183,7 @@ describe('useOnyx lifecycle contract', () => {
             expect(recorders[2].commits).toHaveLength(removedCommits);
         });
 
-        it('keeps updating a hook when a hook with its own connection on the same key unmounts', async () => {
+        it('keeps updating a hook when another hook on the same key unmounts', async () => {
             await act(async () => Onyx.set(KEYS.SESSION, 'v0'));
             const shared = createRecorder();
             const isolated = createRecorder();
@@ -196,7 +196,6 @@ describe('useOnyx lifecycle contract', () => {
                     <OnyxProbe
                         onyxKey={KEYS.SESSION}
                         recorder={isolated}
-                        options={{reuseConnection: false}}
                     />
                 </>,
             );
@@ -701,8 +700,9 @@ describe('useOnyx lifecycle contract', () => {
             expect(lastCommit(remounted).value).toBe(2);
         });
     });
-    describe('current behaviour (suspected bug)', () => {
-        it('commits a loaded undefined frame, then loading, then loaded when the key switches to a missing key', async () => {
+
+    describe('switching to a missing key', () => {
+        it('commits undefined with loaded status once and never shows loading when the key switches to a missing key', async () => {
             await act(async () => Onyx.set(`${KEYS.POLICY}1`, {name: 'one'}));
             const recorder = createRecorder();
             const {rerender} = render(
@@ -724,12 +724,12 @@ describe('useOnyx lifecycle contract', () => {
             expect(recorder.commits.map((frame) => [frame.value, frame.status])).toEqual([
                 [{name: 'one'}, 'loaded'],
                 [undefined, 'loaded'],
-                [undefined, 'loading'],
-                [undefined, 'loaded'],
             ]);
         });
+    });
 
-        it('commits the pre-merge value after loading when a hook mounts during a pending merge while another hook is connected', async () => {
+    describe('mounting beside a connected hook', () => {
+        it('commits the pre-merge value and then the merged one, without loading, when a hook mounts during a pending merge', async () => {
             await act(async () => Onyx.set(KEYS.SESSION, {step: 1}));
             const connected = createRecorder();
             const mounting = createRecorder();
@@ -760,7 +760,6 @@ describe('useOnyx lifecycle contract', () => {
             await settle();
 
             expect(mounting.commits.map((frame) => [frame.value, frame.status])).toEqual([
-                [undefined, 'loading'],
                 [{step: 1}, 'loaded'],
                 [{step: 2}, 'loaded'],
             ]);

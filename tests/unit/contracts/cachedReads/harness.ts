@@ -1,5 +1,6 @@
 import type OnyxDefault from '../../../../lib';
 import type OnyxCache from '../../../../lib/OnyxCache';
+import type OnyxSubscriptionManager from '../../../../lib/OnyxSubscriptionManager';
 import type OnyxUtilsDefault from '../../../../lib/OnyxUtils';
 import type StorageMock from '../../../../lib/storage/__mocks__';
 import type {InitOptions, OnyxKey} from '../../../../lib/types';
@@ -28,6 +29,7 @@ type OnyxModules = {
     cache: typeof OnyxCache;
     storage: typeof StorageMock;
     OnyxUtils: typeof OnyxUtilsDefault;
+    subscriptions: typeof OnyxSubscriptionManager;
 };
 
 type StartOptions = Omit<InitOptions, 'keys'> & {
@@ -43,6 +45,7 @@ function loadFreshOnyx(): OnyxModules {
         cache: require('../../../../lib/OnyxCache').default,
         storage: require('../../../../lib/storage').default,
         OnyxUtils: require('../../../../lib/OnyxUtils').default,
+        subscriptions: require('../../../../lib/OnyxSubscriptionManager').default,
     };
 }
 

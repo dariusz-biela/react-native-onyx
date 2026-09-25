@@ -39,11 +39,16 @@ type ProbeProps = {
     options?: UseOnyxOptions<OnyxKey, unknown>;
 };
 
-function OnyxProbe({onyxKey, recorder, options}: ProbeProps) {
-    const result = useOnyx<OnyxKey, unknown>(onyxKey, options);
-    useRecordFrames(recorder, result);
-    return null;
+/** Builds a probe around a given useOnyx, so a test can probe the hook of a fresh Onyx module graph. */
+function createOnyxProbe(useOnyxHook: typeof useOnyx) {
+    return function Probe({onyxKey, recorder, options}: ProbeProps) {
+        const result = useOnyxHook<OnyxKey, unknown>(onyxKey, options);
+        useRecordFrames(recorder, result);
+        return null;
+    };
 }
+
+const OnyxProbe = createOnyxProbe(useOnyx);
 
 /** Drains the Onyx promise chains and flushes every React update they schedule. */
 async function settle(): Promise<void> {
@@ -92,7 +97,7 @@ function expectOrderedSubsequence(values: unknown[], allowedStates: unknown[]) {
     }
 }
 
-export {OnyxProbe, actAndSettle, commitValues, createRecorder, expectOrderedSubsequence, lastCommit, render, settle, useRecordFrames};
+export {OnyxProbe, actAndSettle, commitValues, createOnyxProbe, createRecorder, expectOrderedSubsequence, lastCommit, render, settle, useRecordFrames};
 export type {Frame, ProbeProps, Recorder};
 
 // Other contract files import this module, so its own self-check only registers when Jest runs this file.

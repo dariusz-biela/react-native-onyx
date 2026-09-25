@@ -91,11 +91,9 @@ describe('Onyx.update', () => {
             expect(readStorage()).toEqual(expected);
         });
 
-        it('groups members of a prefix-colliding child collection under the parent and skips their subscribers', async () => {
+        it('groups members of a prefix-colliding child collection under the parent and skips the child collection subscriber', async () => {
             await Onyx.set(`${NEST_LEVEL}1`, {a: 1});
-            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
             const child = await recordCollectionAfterInitial(NEST_LEVEL);
-            const parent = await recordCollectionAfterInitial(NEST);
 
             await Onyx.update([
                 {onyxMethod: 'merge', key: `${NEST_LEVEL}1`, value: {b: 1}},
@@ -105,14 +103,11 @@ describe('Onyx.update', () => {
             const expected = {...WITH_DEFAULT, [`${NEST_LEVEL}1`]: {a: 1, b: 1}, [`${NEST_LEVEL}2`]: {c: 1}};
             expect(readCache()).toEqual(expected);
             expect(readStorage()).toEqual(expected);
-            expect(member.calls).toEqual([]);
-            expect(child.calls).toEqual([]);
-            expect(parent.calls).toEqual([{}]);
+            expect(child.calls).toStrictEqual([]);
         });
 
-        it('groups a child collection member with a parent member and skips the child subscribers', async () => {
+        it('groups a child collection member with a parent member and skips the child collection subscriber', async () => {
             await Onyx.set(`${NEST_LEVEL}1`, {a: 1});
-            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
             const child = await recordCollectionAfterInitial(NEST_LEVEL);
             const parent = await recordCollectionAfterInitial(NEST);
 
@@ -122,14 +117,12 @@ describe('Onyx.update', () => {
             ]);
 
             expect(readCache()[`${NEST_LEVEL}1`]).toEqual({a: 1, c: 1});
-            expect(member.calls).toEqual([]);
-            expect(child.calls).toEqual([]);
+            expect(child.calls).toStrictEqual([]);
             expect(parent.calls).toEqual([{[`${NEST}1`]: {b: 1}}]);
         });
 
-        it('lets a setcollection of a parent collection delete child collection members without telling their subscribers', async () => {
+        it('lets a setcollection of a parent collection delete child collection members without telling their collection subscriber', async () => {
             await Onyx.multiSet({[`${NEST_LEVEL}1`]: {a: 1}, [`${NEST}1`]: {a: 1}});
-            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
             const child = await recordCollectionAfterInitial(NEST_LEVEL);
 
             await Onyx.update([{onyxMethod: 'setcollection', key: NEST, value: {[`${NEST}2`]: {b: 1}}}]);
@@ -137,8 +130,7 @@ describe('Onyx.update', () => {
             const expected = {...WITH_DEFAULT, [`${NEST}2`]: {b: 1}};
             expect(readCache()).toEqual(expected);
             expect(readStorage()).toEqual(expected);
-            expect(member.calls).toEqual([]);
-            expect(child.calls).toEqual([]);
+            expect(child.calls).toStrictEqual([]);
         });
 
         it('accepts a change of the other kind after an array merged into an empty key', async () => {
@@ -203,9 +195,6 @@ describe('Onyx.update', () => {
             ]);
 
             // Onyx.merge(key, null) on its own removes an evicted key.
-            expect(await readThroughConnection(TEST)).toEqual({a: 1});
-            expect(await readThroughConnection(OTHER)).toEqual({a: 1});
-            expect(await readThroughConnection(`${A}1`)).toEqual({a: 1});
             expect(readStorage()).toEqual({...WITH_DEFAULT, [TEST]: {a: 1}, [OTHER]: {a: 1}, [`${A}1`]: {a: 1}});
         });
 
@@ -233,6 +222,66 @@ describe('Onyx.update', () => {
             expect(readCache()[`${A}1`]).toEqual({a: 2});
             expect(readCache()[TEST]).toEqual({a: 2});
             expect(readCache()[`${SNAPSHOT}1`]).toEqual({data: {[`${A}1`]: {a: 1}, [TEST]: {a: 1}}});
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        it('tells a prefix-colliding child member subscriber it is undefined when grouped with a parent member, although it holds a value', async () => {
+            await Onyx.set(`${NEST_LEVEL}1`, {a: 1});
+            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
+
+            await Onyx.update([
+                {onyxMethod: 'merge', key: `${NEST}1`, value: {b: 1}},
+                {onyxMethod: 'merge', key: `${NEST_LEVEL}1`, value: {c: 1}},
+            ]);
+
+            // main left the member silent.
+            expect(readCache()[`${NEST_LEVEL}1`]).toEqual({a: 1, c: 1});
+            expect(member.calls).toStrictEqual([undefined]);
+        });
+
+        it('tells a prefix-colliding child member subscriber it is gone when a parent setcollection deletes it', async () => {
+            await Onyx.multiSet({[`${NEST_LEVEL}1`]: {a: 1}, [`${NEST}1`]: {a: 1}});
+            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
+
+            await Onyx.update([{onyxMethod: 'setcollection', key: NEST, value: {[`${NEST}2`]: {b: 1}}}]);
+
+            // main left the member silent.
+            expect(readCache()[`${NEST_LEVEL}1`]).toBeUndefined();
+            expect(member.calls).toStrictEqual([undefined]);
+        });
+
+        it('tells a prefix-colliding child member subscriber it is undefined after a grouped merge of two child members, and leaves the parent collection silent', async () => {
+            await Onyx.set(`${NEST_LEVEL}1`, {a: 1});
+            const member = await recordConnectionAfterInitial(`${NEST_LEVEL}1`);
+            const parent = await recordCollectionAfterInitial(NEST);
+
+            await Onyx.update([
+                {onyxMethod: 'merge', key: `${NEST_LEVEL}1`, value: {b: 1}},
+                {onyxMethod: 'merge', key: `${NEST_LEVEL}2`, value: {c: 1}},
+            ]);
+
+            // main left the member silent and sent the parent a redundant {}.
+            expect(readCache()[`${NEST_LEVEL}1`]).toEqual({a: 1, b: 1});
+            expect(member.calls).toStrictEqual([undefined]);
+            expect(parent.calls).toStrictEqual([]);
+        });
+
+        it('reads evicted keys as missing after a batch sets or merges them to null', async () => {
+            seedColdKey(TEST, {a: 1});
+            seedColdKey(OTHER, {a: 1});
+            seedColdKey(`${A}1`, {a: 1});
+
+            await Onyx.update([
+                {onyxMethod: 'merge', key: TEST, value: null},
+                {onyxMethod: 'set', key: OTHER, value: null},
+                {onyxMethod: 'multiset', key: '', value: {[`${A}1`]: null}},
+            ]);
+
+            // main read {a: 1} from storage for all three; since #834 a connection reads the cache only.
+            expect(await readThroughConnection(TEST)).toBeUndefined();
+            expect(await readThroughConnection(OTHER)).toBeUndefined();
+            expect(await readThroughConnection(`${A}1`)).toBeUndefined();
         });
     });
 });

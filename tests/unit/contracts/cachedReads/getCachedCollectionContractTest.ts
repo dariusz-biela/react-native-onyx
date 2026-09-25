@@ -63,12 +63,12 @@ describe('OnyxUtils.getCachedCollection', () => {
         });
 
         it('returns the same reference on every call while nothing changes', async () => {
-            const {OnyxUtils} = await startOnyx({storedValues: SEEDED});
+            const {OnyxUtils, subscriptions} = await startOnyx({storedValues: SEEDED});
 
             const first = OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT);
 
             expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT)).toBe(first);
-            expect(OnyxUtils.tryGetCachedValue(KEYS.COLLECTION.REPORT)).toBe(first);
+            expect(subscriptions.getState(KEYS.COLLECTION.REPORT)).toBe(first);
         });
 
         it('returns a new reference after a member changes and keeps the unchanged members by reference', async () => {
@@ -141,13 +141,13 @@ describe('OnyxUtils.getCachedCollection', () => {
         });
 
         it('keeps the empty reference of an empty collection when a read finds a member missing from storage', async () => {
-            const {OnyxUtils} = await startOnyx({storedValues: SEEDED});
+            const {OnyxUtils, subscriptions} = await startOnyx({storedValues: SEEDED});
             const before = OnyxUtils.getCachedCollection(KEYS.COLLECTION.EMPTY);
 
             await OnyxUtils.multiGet([`${KEYS.COLLECTION.EMPTY}1`]);
 
             expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.EMPTY)).toBe(before);
-            expect(OnyxUtils.tryGetCachedValue(KEYS.COLLECTION.EMPTY)).toBe(before);
+            expect(subscriptions.getState(KEYS.COLLECTION.EMPTY)).toBe(before);
         });
 
         it('drops a member another instance removed and keeps the others by reference', async () => {

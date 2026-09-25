@@ -1,4 +1,4 @@
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib/types';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 import {deliveredValues} from './utils/deliveries';
 import {KEYS, startOnyx} from './utils/freshOnyx';
@@ -58,20 +58,6 @@ describe('Onyx.connect connection reuse', () => {
 
             expect(late.mock.calls).toEqual([[{v: 2}, KEYS.PLAIN]]);
             expect(late.mock.calls[0][0]).toBe(early.mock.calls.at(-1)?.[0]);
-        });
-
-        it('gives a late joiner on a missing key undefined for both arguments', async () => {
-            const {Onyx} = await startOnyx();
-            const early = jest.fn();
-            Onyx.connect({key: KEYS.PLAIN, callback: early});
-            await waitForPromisesToResolve();
-            const late = jest.fn();
-
-            Onyx.connect({key: KEYS.PLAIN, callback: late});
-            await waitForPromisesToResolve();
-
-            expect(early.mock.calls).toEqual([[undefined, undefined]]);
-            expect(late.mock.calls).toEqual([[undefined, undefined]]);
         });
 
         it('gives a late joiner on a member key the member and its key', async () => {
@@ -302,13 +288,13 @@ describe('Onyx.connect connection reuse', () => {
         });
     });
 
-    describe('reuseConnection false', () => {
+    describe('independent connections (the reuseConnection option was removed in #834)', () => {
         it('gives each connection its own first delivery', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: {id: 1}}});
             const callbacks = Array.from({length: 100}, () => jest.fn());
 
             for (const callback of callbacks) {
-                Onyx.connect({key: KEYS.PLAIN, callback, reuseConnection: false});
+                Onyx.connect({key: KEYS.PLAIN, callback});
             }
             await waitForPromisesToResolve();
 
@@ -322,8 +308,8 @@ describe('Onyx.connect connection reuse', () => {
             const leaving = jest.fn();
             const staying = jest.fn();
             const shared = jest.fn();
-            const leavingConnection = Onyx.connect({key: KEYS.PLAIN, callback: leaving, reuseConnection: false});
-            Onyx.connect({key: KEYS.PLAIN, callback: staying, reuseConnection: false});
+            const leavingConnection = Onyx.connect({key: KEYS.PLAIN, callback: leaving});
+            Onyx.connect({key: KEYS.PLAIN, callback: staying});
             Onyx.connect({key: KEYS.PLAIN, callback: shared});
             await waitForPromisesToResolve();
 
@@ -337,14 +323,14 @@ describe('Onyx.connect connection reuse', () => {
             expect(deliveredValues(shared)).toEqual([1, 2, 3]);
         });
 
-        it('makes a separate connection even after a reusable one exists, so the joiner gets its own first delivery', async () => {
+        it('gives a joiner its own first delivery without re-notifying the existing connection', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.COLLECTION.REPORT + 1]: {id: 1}}});
             const reusable = jest.fn();
             Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: reusable});
             await waitForPromisesToResolve();
             const separate = jest.fn();
 
-            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: separate, reuseConnection: false});
+            Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: separate});
             await waitForPromisesToResolve();
 
             expect(reusable).toHaveBeenCalledTimes(1);
@@ -360,7 +346,7 @@ describe('Onyx.connect connection reuse', () => {
             const churned = jest.fn();
 
             for (let cycle = 0; cycle < 50; cycle++) {
-                Onyx.disconnect(Onyx.connect({key: KEYS.PLAIN, callback: churned, reuseConnection: false}));
+                Onyx.disconnect(Onyx.connect({key: KEYS.PLAIN, callback: churned}));
             }
             await Onyx.set(KEYS.PLAIN, 2);
             await waitForPromisesToResolve();
@@ -409,7 +395,7 @@ describe('Onyx.connect connection reuse', () => {
             Onyx.connect({key: KEYS.COLLECTION.REPORT, callback: newCollection});
             await waitForPromisesToResolve();
 
-            expect(newPlain.mock.calls).toEqual([[undefined, undefined]]);
+            expect(newPlain.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
             expect(deliveredValues(newCollection)).not.toContainEqual({[REPORT_1]: {id: 1}});
             expect(newCollection).toHaveBeenCalledTimes(1);
 
@@ -421,9 +407,9 @@ describe('Onyx.connect connection reuse', () => {
         });
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        // The deferred late-joiner delivery does not check whether the subscriber disconnected meanwhile.
-        it('still calls a late joiner that disconnected synchronously while the connection was live', async () => {
+    describe('fixed by #834 (was a suspected bug)', () => {
+        // main still called the late joiner once with 1: the deferred delivery ignored the disconnect.
+        it('never calls a late joiner that disconnected synchronously while another connection was live', async () => {
             const {Onyx} = await startOnyx({storedValues: {[KEYS.PLAIN]: 1}});
             Onyx.connect({key: KEYS.PLAIN, callback: jest.fn()});
             await waitForPromisesToResolve();
@@ -434,7 +420,24 @@ describe('Onyx.connect connection reuse', () => {
             await Onyx.set(KEYS.PLAIN, 2);
             await waitForPromisesToResolve();
 
-            expect(late.mock.calls).toEqual([[1, KEYS.PLAIN]]);
+            expect(late).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main passed undefined as the key argument too: [[undefined, undefined]] for both subscribers.
+        it('gives a late joiner on a missing key undefined and the key', async () => {
+            const {Onyx} = await startOnyx();
+            const early = jest.fn();
+            Onyx.connect({key: KEYS.PLAIN, callback: early});
+            await waitForPromisesToResolve();
+            const late = jest.fn();
+
+            Onyx.connect({key: KEYS.PLAIN, callback: late});
+            await waitForPromisesToResolve();
+
+            expect(early.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
+            expect(late.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
         });
     });
 });

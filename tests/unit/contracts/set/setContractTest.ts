@@ -1,4 +1,4 @@
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib';
 import type {OnyxKey} from '../../../../lib/types';
 
 import Onyx from '../../../../lib';
@@ -29,8 +29,6 @@ const SKIPPABLE_ID = 'skippable-id';
 
 type Delivery = {value: unknown; key: string | undefined};
 
-type SubscribeOptions = {reuseConnection?: boolean};
-
 const connections: Connection[] = [];
 
 let logAlertSpy: jest.SpiedFunction<typeof Logger.logAlert>;
@@ -45,12 +43,11 @@ function memberOf(collection: unknown, key: string): unknown {
 }
 
 /** Connects a recording callback to the key and drops the initial delivery so only later writes are recorded. */
-async function subscribe(key: OnyxKey, options?: SubscribeOptions): Promise<Delivery[]> {
+async function subscribe(key: OnyxKey): Promise<Delivery[]> {
     const deliveries: Delivery[] = [];
     connections.push(
         Onyx.connect({
             key,
-            reuseConnection: options?.reuseConnection,
             callback: (value: unknown, matchedKey: string | undefined) => {
                 deliveries.push({value, key: matchedKey});
             },
@@ -250,14 +247,14 @@ describe('Onyx.set contract', () => {
             expect(lastValue(deliveries)).toStrictEqual({id: 1, nested: {b: 1}});
         });
 
-        it('notifies every connection to the key, shared or not', async () => {
-            const shared1 = await subscribe(KEYS.TEST);
-            const shared2 = await subscribe(KEYS.TEST);
-            const unique = await subscribe(KEYS.TEST, {reuseConnection: false});
+        it('notifies every connection to the key', async () => {
+            const first = await subscribe(KEYS.TEST);
+            const second = await subscribe(KEYS.TEST);
+            const third = await subscribe(KEYS.TEST);
 
             await Onyx.set(KEYS.TEST, 'value');
 
-            for (const deliveries of [shared1, shared2, unique]) {
+            for (const deliveries of [first, second, third]) {
                 expect(deliveries).toEqual([{value: 'value', key: KEYS.TEST}]);
             }
         });
@@ -314,7 +311,6 @@ describe('Onyx.set contract', () => {
             connections.push(
                 Onyx.connect({
                     key: KEYS.TEST,
-                    reuseConnection: false,
                     callback: (value: unknown) => {
                         if (value !== 'boom') {
                             return;
@@ -323,7 +319,7 @@ describe('Onyx.set contract', () => {
                     },
                 }),
             );
-            const deliveries = await subscribe(KEYS.TEST, {reuseConnection: false});
+            const deliveries = await subscribe(KEYS.TEST);
 
             await Onyx.set(KEYS.TEST, 'boom');
 
@@ -1090,50 +1086,6 @@ describe('Onyx.set contract', () => {
             expect(await StorageMock.getItem(KEYS.TEST)).toBe('trigger');
             expect(await StorageMock.getItem(KEYS.OTHER)).toBe('written from callback');
         });
-
-        it('lets a subscriber overwrite the same key from its callback and ends with the overwrite in the cache', async () => {
-            connections.push(
-                Onyx.connect({
-                    key: KEYS.TEST,
-                    callback: (value: unknown) => {
-                        if (value !== 'first') {
-                            return;
-                        }
-                        Onyx.set(KEYS.TEST, 'second');
-                    },
-                }),
-            );
-            const deliveries = await subscribe(KEYS.TEST);
-
-            await Onyx.set(KEYS.TEST, 'first');
-            await waitForPromisesToResolve();
-
-            expect(cache.get(KEYS.TEST)).toBe('second');
-            expect(lastValue(deliveries)).toBe('second');
-        });
-
-        it('lets a collection subscriber write another member from its callback', async () => {
-            connections.push(
-                Onyx.connect({
-                    key: KEYS.COLLECTION.COLL,
-                    callback: (value: unknown) => {
-                        if (!memberOf(value, `${KEYS.COLLECTION.COLL}1`) || memberOf(value, `${KEYS.COLLECTION.COLL}2`)) {
-                            return;
-                        }
-                        Onyx.set(`${KEYS.COLLECTION.COLL}2`, {id: 2});
-                    },
-                }),
-            );
-            const collection = await subscribe(KEYS.COLLECTION.COLL);
-
-            await Onyx.set(`${KEYS.COLLECTION.COLL}1`, {id: 1});
-            await waitForPromisesToResolve();
-
-            const expected = {[`${KEYS.COLLECTION.COLL}1`]: {id: 1}, [`${KEYS.COLLECTION.COLL}2`]: {id: 2}};
-            expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.COLL)).toEqual(expected);
-            expect(await StorageMock.getItem(`${KEYS.COLLECTION.COLL}2`)).toEqual({id: 2});
-            expect(lastValue(collection)).toEqual(expected);
-        });
     });
 
     describe('eviction bookkeeping', () => {
@@ -1157,6 +1109,60 @@ describe('Onyx.set contract', () => {
         });
     });
 
+    describe('current behaviour (#834 change)', () => {
+        // main shared the default connection and ended it on 'second'; main's reuseConnection: false path already ended on 'first' (pinned as a suspected bug).
+        it('leaves a second subscriber on the stale outer value when another subscriber overwrites the same key from its callback', async () => {
+            connections.push(
+                Onyx.connect({
+                    key: KEYS.TEST,
+                    callback: (value: unknown) => {
+                        if (value !== 'first') {
+                            return;
+                        }
+                        Onyx.set(KEYS.TEST, 'second');
+                    },
+                }),
+            );
+            const deliveries = await subscribe(KEYS.TEST);
+
+            await Onyx.set(KEYS.TEST, 'first');
+            await waitForPromisesToResolve();
+
+            expect(cache.get(KEYS.TEST)).toBe('second');
+            expect(deliveries).toEqual([
+                {value: 'second', key: KEYS.TEST},
+                {value: 'first', key: KEYS.TEST},
+            ]);
+        });
+
+        // main shared the default connection and ended it on the complete collection; main's reuseConnection: false path already ended stale (pinned as a suspected bug).
+        it('leaves a second collection subscriber on a stale snapshot when another subscriber writes a member from its callback', async () => {
+            connections.push(
+                Onyx.connect({
+                    key: KEYS.COLLECTION.COLL,
+                    callback: (value: unknown) => {
+                        if (!memberOf(value, `${KEYS.COLLECTION.COLL}1`) || memberOf(value, `${KEYS.COLLECTION.COLL}2`)) {
+                            return;
+                        }
+                        Onyx.set(`${KEYS.COLLECTION.COLL}2`, {id: 2});
+                    },
+                }),
+            );
+            const collection = await subscribe(KEYS.COLLECTION.COLL);
+
+            await Onyx.set(`${KEYS.COLLECTION.COLL}1`, {id: 1});
+            await waitForPromisesToResolve();
+
+            const complete = {[`${KEYS.COLLECTION.COLL}1`]: {id: 1}, [`${KEYS.COLLECTION.COLL}2`]: {id: 2}};
+            expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.COLL)).toEqual(complete);
+            expect(await StorageMock.getItem(`${KEYS.COLLECTION.COLL}2`)).toEqual({id: 2});
+            expect(collection).toEqual([
+                {value: complete, key: KEYS.COLLECTION.COLL},
+                {value: {[`${KEYS.COLLECTION.COLL}1`]: {id: 1}}, key: KEYS.COLLECTION.COLL},
+            ]);
+        });
+    });
+
     describe('current behaviour (suspected bug)', () => {
         it('leaves storage on the outer value when a subscriber overwrites the same key during the notification', async () => {
             connections.push(
@@ -1177,51 +1183,6 @@ describe('Onyx.set contract', () => {
 
             expect(cache.get(KEYS.TEST)).toBe('second');
             expect(await StorageMock.getItem(KEYS.TEST)).toBe('first');
-        });
-
-        it('leaves an independent subscriber on the stale outer value after a nested overwrite', async () => {
-            connections.push(
-                Onyx.connect({
-                    key: KEYS.TEST,
-                    reuseConnection: false,
-                    callback: (value: unknown) => {
-                        if (value !== 'first') {
-                            return;
-                        }
-                        Onyx.set(KEYS.TEST, 'second');
-                    },
-                }),
-            );
-            const deliveries = await subscribe(KEYS.TEST, {reuseConnection: false});
-
-            await Onyx.set(KEYS.TEST, 'first');
-            await waitForPromisesToResolve();
-
-            expect(cache.get(KEYS.TEST)).toBe('second');
-            expect(deliveries.map((delivery) => delivery.value)).toEqual(['second', 'first']);
-        });
-
-        it('leaves an independent collection subscriber on a stale snapshot after another subscriber writes a member', async () => {
-            connections.push(
-                Onyx.connect({
-                    key: KEYS.COLLECTION.COLL,
-                    reuseConnection: false,
-                    callback: (value: unknown) => {
-                        if (!memberOf(value, `${KEYS.COLLECTION.COLL}1`) || memberOf(value, `${KEYS.COLLECTION.COLL}2`)) {
-                            return;
-                        }
-                        Onyx.set(`${KEYS.COLLECTION.COLL}2`, {id: 2});
-                    },
-                }),
-            );
-            const collection = await subscribe(KEYS.COLLECTION.COLL, {reuseConnection: false});
-
-            await Onyx.set(`${KEYS.COLLECTION.COLL}1`, {id: 1});
-            await waitForPromisesToResolve();
-
-            const complete = {[`${KEYS.COLLECTION.COLL}1`]: {id: 1}, [`${KEYS.COLLECTION.COLL}2`]: {id: 2}};
-            expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.COLL)).toEqual(complete);
-            expect(collection.map((delivery) => delivery.value)).toEqual([complete, {[`${KEYS.COLLECTION.COLL}1`]: {id: 1}}]);
         });
 
         it('drops a pending merge even when the set itself is ignored because the value is undefined', async () => {

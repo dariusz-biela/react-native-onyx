@@ -2,7 +2,7 @@ import type {OnyxKey} from '../../../../lib/types';
 import {KEYS} from '../connect/utils/freshOnyx';
 import {R1, R2, R3, REPORT, instanceSyncHandler, namesOf, startHarness} from './utils/harness';
 
-describe('keyChanged notification order', () => {
+describe('notifyKey notification order', () => {
     it('notifies subscribers of a plain key in subscription order', async () => {
         const {OnyxUtils, log, connect, settle} = await startHarness();
         connect('first', KEYS.PLAIN);
@@ -10,7 +10,7 @@ describe('keyChanged notification order', () => {
         connect('third', KEYS.PLAIN);
         await settle();
 
-        OnyxUtils.keyChanged<OnyxKey>(KEYS.PLAIN, 'value');
+        OnyxUtils.notifyKey<OnyxKey>(KEYS.PLAIN, 'value');
 
         expect(namesOf(log)).toEqual(['first', 'second', 'third']);
     });
@@ -44,18 +44,18 @@ describe('keyChanged notification order', () => {
     });
 });
 
-describe('keysChanged notification order', () => {
-    it('notifies roots first, then member subscribers in batch key order with each key in subscription order', async () => {
-        const {OnyxUtils, log, connect, settle} = await startHarness({storedValues: {[R1]: {id: 1}, [R2]: {id: 2}, [R3]: {id: 3}}});
-        connect('R1 A', R1);
-        connect('root A', REPORT);
-        connect('R2 A', R2);
-        connect('R1 B', R1);
-        connect('root B', REPORT);
-        connect('R3 A', R3);
+describe('notifyCollection notification order', () => {
+    it('notifies root listeners first, then member listeners in batch key order with each key in subscription order', async () => {
+        const {OnyxUtils, log, listen, settle} = await startHarness({storedValues: {[R1]: {id: 1}, [R2]: {id: 2}, [R3]: {id: 3}}});
+        listen('R1 A', R1);
+        listen('root A', REPORT);
+        listen('R2 A', R2);
+        listen('R1 B', R1);
+        listen('root B', REPORT);
+        listen('R3 A', R3);
         await settle();
 
-        OnyxUtils.keysChanged(REPORT, {[R2]: {id: 2}, [R1]: {id: 1}}, {});
+        OnyxUtils.notifyCollection(REPORT, {[R2]: {id: 2}, [R1]: {id: 1}}, {});
 
         expect(namesOf(log)).toEqual(['root A', 'root B', 'R2 A', 'R1 A', 'R1 B']);
     });

@@ -119,14 +119,17 @@ describe('OnyxUtils.getAllKeys', () => {
         expect(keys).not.toContain(REPORT_1);
         expect(keys).toContain(KEYS.PLAIN);
     });
+});
 
-    it('delivers members only written to storage after an empty boot to a collection subscriber', async () => {
+describe('current behaviour (#834 change)', () => {
+    it('does not deliver members only written to storage after an empty boot to a collection subscriber', async () => {
         const {Onyx, storage} = await startOnyx();
         await storage.multiSet([
             [REPORT_1, {id: 1}],
             [REPORT_2, {id: 2}],
             [RAM_MEMBER, {stale: true}],
         ]);
+        storage.getAllKeys.mockClear();
         const callback = jest.fn();
         const ramCallback = jest.fn();
 
@@ -134,10 +137,10 @@ describe('OnyxUtils.getAllKeys', () => {
         Onyx.connect({key: KEYS.COLLECTION.RAM_ONLY, callback: ramCallback});
         await waitForPromisesToResolve();
 
-        expect(callback.mock.calls.at(-1)).toEqual([{[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}, KEYS.COLLECTION.REPORT]);
-        for (const [value] of ramCallback.mock.calls) {
-            expect(value ?? {}).toEqual({});
-        }
+        // main listed storage keys on connect and delivered {report_1, report_2}.
+        expect(callback.mock.calls).toEqual([[{}, KEYS.COLLECTION.REPORT]]);
+        expect(ramCallback.mock.calls).toEqual([[{}, KEYS.COLLECTION.RAM_ONLY]]);
+        expect(storage.getAllKeys).not.toHaveBeenCalled();
     });
 });
 

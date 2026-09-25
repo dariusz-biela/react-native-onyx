@@ -88,16 +88,13 @@ async function runSeed(variant: MergeVariant, seed: number): Promise<Coverage> {
             expect({label, count: delivered.length}).toStrictEqual({label, count: 1});
             expect(delivered.at(-1)).toBe(actual);
         } else {
-            // Removing a key that is already absent re-delivers undefined once today, see the suspected bug test.
-            const allowedDeliveries = before === undefined && actual === undefined ? [[], [undefined]] : [[]];
-            expect({label, delivered: allowedDeliveries.some((allowed) => deepEqual(allowed, delivered))}).toStrictEqual({label, delivered: true});
+            expect({label, delivered}).toStrictEqual({label, delivered: []});
             expect(actual).toBe(before);
         }
 
         if (isMember) {
             const snapshots = collectionRecorder.values() as Array<Record<string, unknown>>;
-            const staysAbsent = before === undefined && actual === undefined;
-            expect({label, count: snapshots.length <= (changed || staysAbsent ? 1 : 0), atLeastOne: !changed || snapshots.length >= 1}).toStrictEqual({label, count: true, atLeastOne: true});
+            expect({label, count: snapshots.length <= (changed ? 1 : 0), atLeastOne: !changed || snapshots.length >= 1}).toStrictEqual({label, count: true, atLeastOne: true});
             if (changed) {
                 expect(snapshots.at(-1)?.[MEMBER]).toBe(actual);
                 expect(snapshots.at(-1)?.[SIBLING]).toBe(cache.get(SIBLING));

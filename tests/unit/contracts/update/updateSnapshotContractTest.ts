@@ -157,7 +157,7 @@ describe('Onyx.update keeps cached snapshots in sync', () => {
 
         await Onyx.update([{onyxMethod: 'merge', key: TEST, value: {a: 2}}]);
 
-        expect(snapshotSubscriber.calls).toEqual([]);
+        expect(snapshotSubscriber.calls).toStrictEqual([]);
     });
 
     it('delivers the synced snapshot and the data before the returned promise resolves', async () => {

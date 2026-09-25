@@ -378,11 +378,19 @@ describe('Onyx.clear subscriber contract', () => {
         it('keeps notifying the other subscribers when one throws', async () => {
             const {Onyx} = await loadOnyx();
             await seedAccount(Onyx);
-            const throwAfterInitial = createRecorder(() => {
-                throw new Error('subscriber failure');
-            });
-            Onyx.connect({key: KEYS.PLAIN_EXTENDED, callback: throwAfterInitial.callback});
-            Onyx.connect({key: KEYS.COLLECTION.TEST, callback: throwAfterInitial.callback});
+            // #834 no longer catches a throw from the initial delivery, so these throw from the second one on.
+            const createThrowAfterInitial = () => {
+                let delivered = false;
+                return () => {
+                    if (!delivered) {
+                        delivered = true;
+                        return;
+                    }
+                    throw new Error('subscriber failure');
+                };
+            };
+            Onyx.connect({key: KEYS.PLAIN_EXTENDED, callback: createThrowAfterInitial()});
+            Onyx.connect({key: KEYS.COLLECTION.TEST, callback: createThrowAfterInitial()});
             await flush();
             const plain = await subscribe(Onyx, KEYS.PLAIN);
             const reports = await subscribe(Onyx, KEYS.COLLECTION.REPORT);

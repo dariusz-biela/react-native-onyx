@@ -166,45 +166,6 @@ describe('OnyxUtils.get', () => {
             await expect(OnyxUtils.get(KEYS.PLAIN)).resolves.toEqual({fresh: true});
         });
 
-        it('applies a merge queued behind an in-flight read on top of the stored value, with no extra storage read', async () => {
-            const modules = await startOnyx({storedValues: {[KEYS.PLAIN]: {a: 1, b: 1}}});
-            const {Onyx, OnyxUtils, cache, storage} = modules;
-            makeCold(modules, KEYS.PLAIN);
-            const release = holdNextGetItem(storage);
-
-            const read = OnyxUtils.get(KEYS.PLAIN);
-            const merge = Onyx.merge(KEYS.PLAIN, {b: 2, c: 3});
-            await waitForPromisesToResolve();
-            release();
-            const readValue = await read;
-            await merge;
-
-            expect([
-                {a: 1, b: 1},
-                {a: 1, b: 2, c: 3},
-            ]).toContainEqual(readValue);
-            expect(cache.get(KEYS.PLAIN)).toEqual({a: 1, b: 2, c: 3});
-            await expect(OnyxUtils.get(KEYS.PLAIN)).resolves.toEqual({a: 1, b: 2, c: 3});
-            expect(countStorageReadsOf(storage, KEYS.PLAIN)).toBeLessThanOrEqual(1);
-        });
-
-        it('drops the key when a null merge lands while the read is in flight', async () => {
-            const modules = await startOnyx({storedValues: {[KEYS.PLAIN]: {id: 1}}});
-            const {Onyx, OnyxUtils, cache, storage} = modules;
-            makeCold(modules, KEYS.PLAIN);
-            const release = holdNextGetItem(storage);
-
-            const read = OnyxUtils.get(KEYS.PLAIN);
-            const merge = Onyx.merge(KEYS.PLAIN, null);
-            await waitForPromisesToResolve();
-            release();
-            await Promise.all([read, merge]);
-
-            expect(cache.get(KEYS.PLAIN)).toBeUndefined();
-            expect((await OnyxUtils.get(KEYS.PLAIN)) ?? undefined).toBeUndefined();
-            await expect(storage.getItem(KEYS.PLAIN)).resolves.toBeNull();
-        });
-
         it('resolves undefined without rejecting when storage fails, and reads storage again next time', async () => {
             const modules = await startOnyx({storedValues: {[KEYS.PLAIN]: 'stored'}});
             const {OnyxUtils, cache, storage} = modules;
@@ -230,11 +191,10 @@ describe('OnyxUtils.get', () => {
         });
 
         it('resolves undefined without reading storage for a key already known to be empty', async () => {
-            const {Onyx, OnyxUtils, storage} = await startOnyx({storedValues: {[KEYS.PLAIN]: 'warm'}});
-            const callback = jest.fn();
-            Onyx.connect({key: KEYS.PLAIN_2, callback});
-            await waitForPromisesToResolve();
+            const {OnyxUtils, storage} = await startOnyx({storedValues: {[KEYS.PLAIN]: 'warm'}});
+            await OnyxUtils.multiGet([KEYS.PLAIN_2]);
             storage.getItem.mockClear();
+            storage.multiGet.mockClear();
 
             await expect(OnyxUtils.get(KEYS.PLAIN_2)).resolves.toBeUndefined();
             expect(keysReadFromStorage(storage)).toEqual([]);
@@ -346,6 +306,61 @@ describe('OnyxUtils.tupleGet', () => {
 
         expect(plain).toBe(cache.get(KEYS.PLAIN));
         expect(report).toBe(cache.get(REPORT_1));
+    });
+});
+
+describe('current behaviour (#834 change)', () => {
+    it('resolves the stored value without the fields of a merge queued behind an in-flight read on a cold key, and loses them', async () => {
+        const modules = await startOnyx({storedValues: {[KEYS.PLAIN]: {a: 1, b: 1}}});
+        const {Onyx, OnyxUtils, cache, storage} = modules;
+        makeCold(modules, KEYS.PLAIN);
+        const release = holdNextGetItem(storage);
+
+        const read = OnyxUtils.get(KEYS.PLAIN);
+        const merge = Onyx.merge(KEYS.PLAIN, {b: 2, c: 3});
+        await waitForPromisesToResolve();
+        release();
+        const readValue = await read;
+        await merge;
+
+        // main merged onto the stored value: {a: 1, b: 2, c: 3} everywhere.
+        expect(readValue).toEqual({b: 2, c: 3});
+        expect(cache.get(KEYS.PLAIN)).toEqual({b: 2, c: 3});
+        await expect(OnyxUtils.get(KEYS.PLAIN)).resolves.toEqual({b: 2, c: 3});
+        expect(countStorageReadsOf(storage, KEYS.PLAIN)).toBe(1);
+        await expect(storage.getItem(KEYS.PLAIN)).resolves.toEqual({b: 2, c: 3});
+    });
+
+    it('keeps the stored value in the cache when a null merge lands while the read is in flight, while storage holds null', async () => {
+        const modules = await startOnyx({storedValues: {[KEYS.PLAIN]: {id: 1}}});
+        const {Onyx, OnyxUtils, cache, storage} = modules;
+        makeCold(modules, KEYS.PLAIN);
+        const release = holdNextGetItem(storage);
+
+        const read = OnyxUtils.get(KEYS.PLAIN);
+        const merge = Onyx.merge(KEYS.PLAIN, null);
+        await waitForPromisesToResolve();
+        release();
+        const [readValue] = await Promise.all([read, merge]);
+
+        // main dropped the key from the cache.
+        expect(readValue).toEqual({id: 1});
+        expect(cache.get(KEYS.PLAIN)).toEqual({id: 1});
+        await expect(OnyxUtils.get(KEYS.PLAIN)).resolves.toEqual({id: 1});
+        await expect(storage.getItem(KEYS.PLAIN)).resolves.toBeNull();
+    });
+
+    it('reads storage for a missing key a subscriber connected to, and resolves null', async () => {
+        const {Onyx, OnyxUtils, storage} = await startOnyx({storedValues: {[KEYS.PLAIN]: 'warm'}});
+        const callback = jest.fn();
+        Onyx.connect({key: KEYS.PLAIN_2, callback});
+        await waitForPromisesToResolve();
+        storage.getItem.mockClear();
+        storage.multiGet.mockClear();
+
+        // main marked the key known-empty on connect and resolved undefined without a read.
+        await expect(OnyxUtils.get(KEYS.PLAIN_2)).resolves.toBeNull();
+        expect(keysReadFromStorage(storage)).toEqual([KEYS.PLAIN_2]);
     });
 });
 

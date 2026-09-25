@@ -17,7 +17,7 @@ import {
     resetOnyx,
     seedPartlyCold,
 } from './harness';
-import {applyUpdate, applyUpdates, defaultState} from './referenceModel';
+import {applyUpdate, applyUpdates, coldKeysReadByUpdate, defaultState} from './referenceModel';
 
 const SEEDS_PER_SCENARIO = 150;
 const ORDER_INDEPENDENT_METHODS: ReadonlyArray<Update['onyxMethod']> = ['set', 'merge', 'multiset', 'mergecollection'];
@@ -167,19 +167,6 @@ describe('Onyx.update matches applying its entries one by one', () => {
         expectSubscribersFollowTheBatch(recorders, states);
     });
 
-    it.each(seeds(1001))('partly evicted cache, seed %i: reads and storage end in the sequential state', async (seed) => {
-        const random = createRandom(seed);
-        const initial = randomInitialState(random);
-        const batch = withoutKeyRemovals(randomBatch(random, {length: 1 + random.int(8), methods: ORDER_INDEPENDENT_METHODS}));
-        await seedPartlyCold(initial, () => random.chance(0.5));
-
-        await Onyx.update(batch);
-
-        const expected = withDefaults(applyUpdates(initial, batch));
-        expect(await readKeysThroughConnections(READ_KEYS)).toEqual(expected);
-        expect(readStorage()).toEqual(expected);
-    });
-
     it.each(seeds(2001))('setCollection with unrelated entries, seed %i: ends in the sequential state', async (seed) => {
         const random = createRandom(seed);
         const initial = randomInitialState(random);
@@ -207,5 +194,22 @@ describe('Onyx.update matches applying its entries one by one', () => {
         const expected = withDefaults(applyUpdates(initial, batch));
         expect(readCache()).toEqual(expected);
         expect(readStorage()).toEqual(expected);
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main read the stored value of every cold key, so reads and storage ended in applyUpdates(initial, batch).
+        it.each(seeds(1001))('partly evicted cache, seed %i: only cold members of a grouped collection write are read, the rest count as missing', async (seed) => {
+            const random = createRandom(seed);
+            const initial = randomInitialState(random);
+            const batch = withoutKeyRemovals(randomBatch(random, {length: 1 + random.int(8), methods: ORDER_INDEPENDENT_METHODS}));
+            const {warm, cold} = await seedPartlyCold(initial, () => random.chance(0.5));
+
+            await Onyx.update(batch);
+
+            const expected = withDefaults(applyUpdates({...warm, ...coldKeysReadByUpdate(cold, batch)}, batch));
+            expect(await readKeysThroughConnections(READ_KEYS)).toEqual(expected);
+            expect(readCache()).toEqual(expected);
+            expect(readStorage()).toEqual({...cold, ...expected});
+        });
     });
 });

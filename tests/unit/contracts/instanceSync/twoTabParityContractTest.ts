@@ -70,14 +70,14 @@ function randomOperation(random: Rng): Operation {
             return {describe: `mergeCollection ${JSON.stringify(members)}`, run: (tab) => tab.Onyx.mergeCollection(collectionKey, members)};
         }
         case 'setCollection': {
-            // setCollection on test_ also drops test_level_ members without telling the writer's subscribers, pinned below.
+            // setCollection on test_ also drops test_level_ members, pinned below.
             const members = membersOf(random, KEYS.COLLECTION.TEST_LEVEL);
             return {describe: `setCollection ${JSON.stringify(members)}`, run: (tab) => tab.Onyx.setCollection(KEYS.COLLECTION.TEST_LEVEL, members)};
         }
         case 'update': {
             const key = pick(random, PLAIN_KEYS);
             const value = randomValue(random);
-            // Onyx.update does not notify the writer when a mergecollection removes a member, pinned below.
+            // Removals stay out: the writer missed them before #834, now pinned as told below.
             const members = Object.fromEntries(Object.entries(membersOf(random, collectionKey)).filter(([, member]) => member !== null));
             return {
                 describe: `update ${key} ${JSON.stringify(value)} ${JSON.stringify(members)}`,
@@ -144,6 +144,20 @@ async function expectTabsInSync(first: Tab, second: Tab, context: string): Promi
     expect({context, cache: secondCache}).toEqual({context, cache: stored});
 }
 
+const UPDATE_MIXING_EVERY_METHOD: Operation[] = [
+    {
+        describe: 'update',
+        run: (tab) =>
+            tab.Onyx.update([
+                {onyxMethod: 'set', key: KEYS.PLAIN, value: 'u'},
+                {onyxMethod: 'merge', key: KEYS.OBJECT, value: {u: 1}},
+                {onyxMethod: 'multiset', key: '', value: {[KEYS.NVP]: 'n', test_level_1: {id: 1}}},
+                {onyxMethod: 'mergecollection', key: KEYS.COLLECTION.TEST, value: {test_1: {id: 1}}},
+                {onyxMethod: 'setcollection', key: KEYS.COLLECTION.TEST_LEVEL, value: {test_level_1: {id: 1}, test_level_2: {id: 2}}},
+            ]),
+    },
+];
+
 describe('two tabs on one storage', () => {
     it.each<[string, Operation[]]>([
         ['set', [{describe: 'set', run: (tab) => tab.Onyx.set(KEYS.OBJECT, {a: 1, b: {c: 2}})}]],
@@ -161,22 +175,6 @@ describe('two tabs on one storage', () => {
             [
                 {describe: 'mergeCollection', run: (tab) => tab.Onyx.mergeCollection(KEYS.COLLECTION.TEST, {test_1: {id: 1}, test_2: {id: 2}})},
                 {describe: 'setCollection', run: (tab) => tab.Onyx.setCollection(KEYS.COLLECTION.TEST, {test_3: {id: 3}})},
-            ],
-        ],
-        [
-            'update mixing every method',
-            [
-                {
-                    describe: 'update',
-                    run: (tab) =>
-                        tab.Onyx.update([
-                            {onyxMethod: 'set', key: KEYS.PLAIN, value: 'u'},
-                            {onyxMethod: 'merge', key: KEYS.OBJECT, value: {u: 1}},
-                            {onyxMethod: 'multiset', key: '', value: {[KEYS.NVP]: 'n', test_level_1: {id: 1}}},
-                            {onyxMethod: 'mergecollection', key: KEYS.COLLECTION.TEST, value: {test_1: {id: 1}}},
-                            {onyxMethod: 'setcollection', key: KEYS.COLLECTION.TEST_LEVEL, value: {test_level_1: {id: 1}, test_level_2: {id: 2}}},
-                        ]),
-                },
             ],
         ],
         [
@@ -283,8 +281,51 @@ describe('two tabs on one storage', () => {
         }
     });
 
+    it('tells the subscribers in both tabs when Onyx.update removes a member of a prefix-colliding collection', async () => {
+        const writer = await openTab();
+        const reader = await openTab();
+        await writeAndSync(writer, reader, [{describe: 'mergeCollection', run: (tab) => tab.Onyx.mergeCollection(KEYS.COLLECTION.TEST_LEVEL, {test_level_2: {id: 2}})}]);
+        const writerMember = record(writer, 'test_level_2');
+        const readerMember = record(reader, 'test_level_2');
+        await settle();
+
+        await writeAndSync(writer, reader, [
+            {
+                describe: 'update',
+                run: (tab) => tab.Onyx.update([toUpdate({onyxMethod: 'mergecollection', key: KEYS.COLLECTION.TEST_LEVEL, value: {test_level_1: {id: 1}, test_level_2: null}})]),
+            },
+        ]);
+
+        expect(readShared()).toEqual({test_level_1: {id: 1}});
+        expect(writer.cache.get('test_level_2')).toBeUndefined();
+        expect(writerMember.values.at(-1)).toBeUndefined();
+        expect(readerMember.values.at(-1)).toBeUndefined();
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main: the writer's test_level_1 subscriber ended on {id: 1}, matching the other tab.
+        it('leaves the writer tab test_level_1 subscriber on undefined after update mixing every method', async () => {
+            const writer = await openTab();
+            const reader = await openTab();
+            const writerSeen = recordAll(writer);
+            const readerSeen = recordAll(reader);
+            await settle();
+
+            const before = readShared();
+            const {announced} = await writeAndSync(writer, reader, UPDATE_MIXING_EVERY_METHOD);
+            const after = readShared();
+
+            const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+            expect(announced).toEqual(expect.arrayContaining(changed));
+            await expectTabsInSync(writer, reader, 'update mixing every method');
+            expect(writer.cache.get('test_level_1')).toEqual({id: 1});
+            expect(writerSeen.get('test_level_1')?.values).toEqual([undefined, {id: 1}, undefined]);
+            expect(lastValues(readerSeen)).toEqual({...lastValues(writerSeen), test_level_1: {id: 1}});
+        });
+    });
+
     describe('current behaviour (suspected bug)', () => {
-        it('setCollection on a prefix collection leaves the writer tab subscribers stale while the other tab is told', async () => {
+        it('setCollection on a prefix collection drops the prefix-colliding members and tells the subscribers in both tabs', async () => {
             const writer = await openTab();
             const reader = await openTab();
             await writeAndSync(writer, reader, [{describe: 'multiSet', run: (tab) => tab.Onyx.multiSet({test_3: {id: 3}, test_level_1: {id: 1}})}]);
@@ -297,28 +338,7 @@ describe('two tabs on one storage', () => {
             expect(readShared()).toEqual({test_1: 'b'});
             expect(writer.cache.get('test_level_1')).toBeUndefined();
             expect(reader.cache.get('test_level_1') ?? undefined).toBeUndefined();
-            expect(writerMember.values.at(-1)).toEqual({id: 1});
-            expect(readerMember.values.at(-1)).toBeUndefined();
-        });
-
-        it('Onyx.update removing a member of a prefix-colliding collection leaves the writer tab subscribers stale while the other tab is told', async () => {
-            const writer = await openTab();
-            const reader = await openTab();
-            await writeAndSync(writer, reader, [{describe: 'mergeCollection', run: (tab) => tab.Onyx.mergeCollection(KEYS.COLLECTION.TEST_LEVEL, {test_level_2: {id: 2}})}]);
-            const writerMember = record(writer, 'test_level_2');
-            const readerMember = record(reader, 'test_level_2');
-            await settle();
-
-            await writeAndSync(writer, reader, [
-                {
-                    describe: 'update',
-                    run: (tab) => tab.Onyx.update([toUpdate({onyxMethod: 'mergecollection', key: KEYS.COLLECTION.TEST_LEVEL, value: {test_level_1: {id: 1}, test_level_2: null}})]),
-                },
-            ]);
-
-            expect(readShared()).toEqual({test_level_1: {id: 1}});
-            expect(writer.cache.get('test_level_2')).toBeUndefined();
-            expect(writerMember.values.at(-1)).toEqual({id: 2});
+            expect(writerMember.values.at(-1)).toBeUndefined();
             expect(readerMember.values.at(-1)).toBeUndefined();
         });
     });

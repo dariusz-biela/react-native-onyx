@@ -1,6 +1,5 @@
 import {act, renderHook} from '@testing-library/react-native';
 import Onyx, {useOnyx} from '../../../../lib';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const KEYS = {
@@ -44,8 +43,6 @@ Onyx.init({
 
 beforeEach(async () => {
     await Onyx.clear();
-    onyxSnapshotCache.clear();
-    onyxSnapshotCache.clearSelectorIds();
 });
 
 describe('Onyx.multiSet contract with useOnyx', () => {

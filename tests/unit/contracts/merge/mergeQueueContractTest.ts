@@ -101,15 +101,6 @@ describe.each(MERGE_VARIANTS)('Onyx.merge contract (%s OnyxMerge)', (variant: Me
             await expectStorageToMatchCache(KEYS.OBJECT);
         });
 
-        it('reads a value persisted by an earlier session before merging into it', async () => {
-            cache.drop(KEYS.OTHER_OBJECT);
-            await writeStored(KEYS.OTHER_OBJECT, {a: 1, b: {c: 1}});
-            await Onyx.merge(KEYS.OTHER_OBJECT, {b: {d: 1}});
-
-            expect(cache.get(KEYS.OTHER_OBJECT)).toStrictEqual({a: 1, b: {c: 1, d: 1}});
-            await expectStorageToMatchCache(KEYS.OTHER_OBJECT);
-        });
-
         it('merges on top of a default key state', async () => {
             await Onyx.merge(KEYS.DEFAULT_OBJECT, {b: 2});
 
@@ -548,6 +539,15 @@ describe.each(MERGE_VARIANTS)('Onyx.merge contract (%s OnyxMerge)', (variant: Me
     });
 
     describe('subscribers', () => {
+        it('delivers nothing when a null is merged into a key that is already absent', async () => {
+            const recorder = await recordFromNow(KEYS.OBJECT);
+
+            await Onyx.merge(KEYS.OBJECT, null);
+            await flush();
+
+            expect(recorder.values()).toStrictEqual([]);
+        });
+
         it('notifies only the matching collection when collection keys share a prefix', async () => {
             const twin = await recordFromNow(KEYS.PREFIX_TWIN);
             const collection = await recordFromNow(KEYS.COLLECTION.TEST);
@@ -664,6 +664,21 @@ describe.each(MERGE_VARIANTS)('Onyx.merge contract (%s OnyxMerge)', (variant: Me
             expect(await readStored(ramMember)).toBeNull();
         });
     });
+
+    describe('current behaviour (#834 change)', () => {
+        // main read the stored value and merged into it: cache and storage held {a: 1, b: {c: 1, d: 1}}.
+        it('merges into nothing when a value was written to storage behind Onyx after init', async () => {
+            cache.drop(KEYS.OTHER_OBJECT);
+            await writeStored(KEYS.OTHER_OBJECT, {a: 1, b: {c: 1}});
+            await Onyx.merge(KEYS.OTHER_OBJECT, {b: {d: 1}});
+            await flush();
+
+            expect(cache.get(KEYS.OTHER_OBJECT)).toStrictEqual({b: {d: 1}});
+            // Web replaces the row with the cache value; native patches the stored row, so it diverges from the cache.
+            const expectedStored = variant === 'web' ? {b: {d: 1}} : {a: 1, b: {c: 1, d: 1}};
+            expect(await readStored(KEYS.OTHER_OBJECT)).toStrictEqual(expectedStored);
+        });
+    });
 });
 
 /** Each case lists what the web and the native variant produce today; the storage values are what SQLite holds afterwards. */
@@ -729,15 +744,6 @@ const SUSPECTED_BUG_CASES: DivergenceCase[] = [
 
 describe('current behaviour (suspected bug)', () => {
     beforeAll(initOnyxForMergeContracts);
-
-    it('re-delivers undefined when a null is merged into a key that is already absent', async () => {
-        const recorder = await recordFromNow(KEYS.OBJECT);
-
-        await Onyx.merge(KEYS.OBJECT, null);
-        await flush();
-
-        expect(recorder.values()).toStrictEqual([undefined]);
-    });
 
     afterEach(async () => {
         disconnectAll();

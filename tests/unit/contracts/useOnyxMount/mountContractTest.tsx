@@ -38,11 +38,15 @@ function selectField(field: string): UseOnyxSelector<OnyxKey, unknown> {
     return (data) => (isRecord(data) ? data[field] : undefined);
 }
 
-function expectColdMountFrames(recorder: Recorder, finalValue: unknown) {
+function framesOf(recorder: Recorder): unknown[] {
+    return recorder.commits.map((frame) => [frame.value, frame.status]);
+}
+
+function expectLoadingMountFrames(recorder: Recorder, finalValue: unknown) {
     expect(recorder.commits[0]).toMatchObject({value: undefined, status: 'loading'});
     expect(lastCommit(recorder)).toMatchObject({status: 'loaded'});
     expect(lastCommit(recorder).value).toEqual(finalValue);
-    // A cold mount may skip frames but it never commits 'loaded' with a value other than the final one.
+    // A loading mount may skip frames but it never commits 'loaded' with a value other than the final one.
     for (const frame of recorder.commits) {
         if (frame.status === 'loaded') {
             expect(frame.value).toEqual(finalValue);
@@ -153,153 +157,7 @@ describe('useOnyx mount contract', () => {
         });
     });
 
-    describe('cold key (only in storage)', () => {
-        it('commits loading first and then the stored value, with no loaded frame in between', async () => {
-            await StorageMock.setItem(KEYS.SESSION, {email: 'stored@b.c'});
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, {email: 'stored@b.c'});
-        });
-
-        it('loads a stored collection member', async () => {
-            await StorageMock.setItem(`${KEYS.REPORT}1`, {reportID: '1'});
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={`${KEYS.REPORT}1`}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, {reportID: '1'});
-        });
-
-        it('loads a stored collection root without members of a collection whose key starts with the same prefix', async () => {
-            await StorageMock.setItem(`${KEYS.REPORT}1`, {reportID: '1'});
-            await StorageMock.setItem(`${KEYS.REPORT}2`, {reportID: '2'});
-            await StorageMock.setItem(`${KEYS.REPORT_DRAFT}1`, {draft: true});
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.REPORT}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, {[`${KEYS.REPORT}1`]: {reportID: '1'}, [`${KEYS.REPORT}2`]: {reportID: '2'}});
-        });
-
-        it('delivers the stored value to many hooks mounted together while the key is loading', async () => {
-            await StorageMock.setItem(KEYS.SESSION, 'stored');
-            const recorders = Array.from({length: 20}, () => createRecorder());
-
-            render(
-                <>
-                    {recorders.map((recorder, index) => (
-                        <OnyxProbe
-                            // eslint-disable-next-line react/no-array-index-key
-                            key={index}
-                            onyxKey={KEYS.SESSION}
-                            recorder={recorder}
-                        />
-                    ))}
-                </>,
-            );
-            await settle();
-
-            for (const recorder of recorders) {
-                expectColdMountFrames(recorder, 'stored');
-            }
-        });
-
-        it('lets a hook that mounts after the first one connected read the value without loading', async () => {
-            await StorageMock.setItem(KEYS.SESSION, 'stored');
-            const first = createRecorder();
-            const second = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={first}
-                />,
-            );
-            await settle();
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={second}
-                />,
-            );
-            await settle();
-
-            expect(second.commits[0]).toMatchObject({value: 'stored', status: 'loaded'});
-            expect(second.commits.length).toBeLessThanOrEqual(1);
-            expect(first.commits.length).toBeLessThanOrEqual(2);
-        });
-
-        it('applies the selector to the stored value and still goes through loading', async () => {
-            await StorageMock.setItem(KEYS.SESSION, {email: 'stored@b.c', authToken: 'x'});
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={recorder}
-                    options={{selector: selectField('email')}}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, 'stored@b.c');
-        });
-    });
-
     describe('missing key', () => {
-        it('commits loading and then undefined with loaded status', async () => {
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={recorder}
-                />,
-            );
-
-            expect(recorder.commits).toHaveLength(1);
-            expect(recorder.commits[0]).toMatchObject({value: undefined, status: 'loading'});
-
-            await settle();
-
-            expectColdMountFrames(recorder, undefined);
-        });
-
-        it('treats a key set to null like a missing key', async () => {
-            await act(async () => Onyx.set(KEYS.SESSION, null));
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, undefined);
-        });
-
         it('maps a selector result of null to undefined', async () => {
             await act(async () => Onyx.set(KEYS.SESSION, {email: null}));
             const recorder = createRecorder();
@@ -511,21 +369,6 @@ describe('useOnyx mount contract', () => {
             expect(recorder.commits.length).toBeLessThanOrEqual(1);
         });
 
-        it('goes through loading to undefined for a member that does not exist while siblings do', async () => {
-            await act(async () => Onyx.set(`${KEYS.REPORT}1`, {reportID: '1'}));
-            const recorder = createRecorder();
-
-            render(
-                <OnyxProbe
-                    onyxKey={`${KEYS.REPORT}2`}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expectColdMountFrames(recorder, undefined);
-        });
-
         it('does not confuse a member of the longer prefixed collection with a member of the shorter one', async () => {
             await act(async () => {
                 await Onyx.set(`${KEYS.REPORT_DRAFT}1`, {draft: true});
@@ -582,25 +425,6 @@ describe('useOnyx mount contract', () => {
     });
 
     describe('pending merges', () => {
-        it('does not commit the pre-merge cached value while a merge for the key is still queued', async () => {
-            await act(async () => Onyx.set(KEYS.SESSION, {step: 1}));
-            const recorder = createRecorder();
-
-            Onyx.merge(KEYS.SESSION, {step: 2});
-            render(
-                <OnyxProbe
-                    onyxKey={KEYS.SESSION}
-                    recorder={recorder}
-                />,
-            );
-            await settle();
-
-            expect(recorder.commits[0]).toMatchObject({value: undefined, status: 'loading'});
-            expect(lastCommit(recorder)).toMatchObject({value: {step: 2}, status: 'loaded'});
-            expect(recorder.commits.some((frame) => frame.status === 'loaded' && isRecord(frame.value) && frame.value.step === 1)).toBe(false);
-            expect(recorder.commits.length).toBeLessThanOrEqual(2);
-        });
-
         it('lands on the result of all queued merges', async () => {
             const recorder = createRecorder();
 
@@ -615,35 +439,28 @@ describe('useOnyx mount contract', () => {
             );
             await settle();
 
-            expectColdMountFrames(recorder, {a: 3, b: 2});
+            expectLoadingMountFrames(recorder, {a: 3, b: 2});
+        });
+
+        it('blanks the output of a selector that has a fallback while the first merge is loading', async () => {
+            const recorder = createRecorder();
+            const selectWithFallback: UseOnyxSelector<OnyxKey, unknown> = (data) => (isRecord(data) ? data.a : 'fallback');
+
+            Onyx.merge(KEYS.SESSION, {a: 1});
+            render(
+                <OnyxProbe
+                    onyxKey={KEYS.SESSION}
+                    recorder={recorder}
+                    options={{selector: selectWithFallback}}
+                />,
+            );
+            await settle();
+
+            expectLoadingMountFrames(recorder, 1);
         });
     });
 
     describe('options', () => {
-        it('returns the same frames with reuseConnection false as with a shared connection', async () => {
-            await StorageMock.setItem(KEYS.SESSION, 'stored');
-            const shared = createRecorder();
-            const unique = createRecorder();
-
-            render(
-                <>
-                    <OnyxProbe
-                        onyxKey={KEYS.SESSION}
-                        recorder={shared}
-                    />
-                    <OnyxProbe
-                        onyxKey={KEYS.SESSION}
-                        recorder={unique}
-                        options={{reuseConnection: false}}
-                    />
-                </>,
-            );
-            await settle();
-
-            expectColdMountFrames(shared, 'stored');
-            expectColdMountFrames(unique, 'stored');
-        });
-
         it('gives hooks with different selectors on one key independent results', async () => {
             await act(async () => Onyx.set(KEYS.SESSION, {email: 'a@b.c', accountID: 5}));
             const email = createRecorder();
@@ -720,12 +537,8 @@ describe('useOnyx mount contract', () => {
             expect(Object.isFrozen(lastCommit(recorder).value)).toBe(true);
             expect(recorder.commits.length).toBeLessThanOrEqual(1);
         });
-    });
 
-    describe('current behaviour (suspected bug)', () => {
-        // The same empty collection is `undefined` in a store that holds no key at all and `{}` as soon as any
-        // unrelated key exists, so consumers see two different "empty" values depending on unrelated data.
-        it('reports an empty collection root as undefined when the store holds no key at all', async () => {
+        it('reports loaded with an empty frozen object when the store holds no key at all', async () => {
             const recorder = createRecorder();
 
             render(
@@ -736,8 +549,104 @@ describe('useOnyx mount contract', () => {
             );
             await settle();
 
-            expect(recorder.commits[0]).toMatchObject({value: undefined, status: 'loading'});
-            expect(lastCommit(recorder)).toMatchObject({value: undefined, status: 'loaded'});
+            expect(framesOf(recorder)).toEqual([[{}, 'loaded']]);
+            expect(Object.isFrozen(lastCommit(recorder).value)).toBe(true);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // On main a missing key committed loading first and then undefined with loaded status.
+        it('commits undefined with loaded status on the very first frame for a missing key', async () => {
+            const recorder = createRecorder();
+
+            render(
+                <OnyxProbe
+                    onyxKey={KEYS.SESSION}
+                    recorder={recorder}
+                />,
+            );
+
+            expect(framesOf(recorder)).toEqual([[undefined, 'loaded']]);
+            await settle();
+            expect(framesOf(recorder)).toEqual([[undefined, 'loaded']]);
+        });
+
+        // On main a key set to null committed loading first and then undefined with loaded status.
+        it('treats a key set to null like a missing key', async () => {
+            await act(async () => Onyx.set(KEYS.SESSION, null));
+            const recorder = createRecorder();
+
+            render(
+                <OnyxProbe
+                    onyxKey={KEYS.SESSION}
+                    recorder={recorder}
+                />,
+            );
+            await settle();
+
+            expect(framesOf(recorder)).toEqual([[undefined, 'loaded']]);
+        });
+
+        // On main a missing member committed loading first and then undefined with loaded status.
+        it('commits undefined with loaded status on the first frame for a member that does not exist while siblings do', async () => {
+            await act(async () => Onyx.set(`${KEYS.REPORT}1`, {reportID: '1'}));
+            const recorder = createRecorder();
+
+            render(
+                <OnyxProbe
+                    onyxKey={`${KEYS.REPORT}2`}
+                    recorder={recorder}
+                />,
+            );
+            await settle();
+
+            expect(framesOf(recorder)).toEqual([[undefined, 'loaded']]);
+        });
+
+        // On main a key present only in storage committed loading and then the stored value read from storage.
+        it('neither reads storage nor shows loading for a key that is in storage but not in the cache', async () => {
+            await StorageMock.setItem(KEYS.SESSION, 'stored');
+            jest.mocked(StorageMock.getItem).mockClear();
+            jest.mocked(StorageMock.multiGet).mockClear();
+            jest.mocked(StorageMock.getAll).mockClear();
+            jest.mocked(StorageMock.getAllKeys).mockClear();
+            const recorder = createRecorder();
+
+            render(
+                <OnyxProbe
+                    onyxKey={KEYS.SESSION}
+                    recorder={recorder}
+                />,
+            );
+            await settle();
+
+            expect(framesOf(recorder)).toEqual([[undefined, 'loaded']]);
+            expect(StorageMock.getItem).not.toHaveBeenCalled();
+            expect(StorageMock.multiGet).not.toHaveBeenCalled();
+            expect(StorageMock.getAll).not.toHaveBeenCalled();
+            expect(StorageMock.getAllKeys).not.toHaveBeenCalled();
+        });
+
+        // On main the hook committed loading and then only the merged value, never the pre-merge cached one.
+        it('commits the pre-merge cached value and then the merged one when it mounts while a merge for the key is queued', async () => {
+            await act(async () => Onyx.set(KEYS.SESSION, {step: 1}));
+            const recorder = createRecorder();
+
+            Onyx.merge(KEYS.SESSION, {step: 2});
+            render(
+                <OnyxProbe
+                    onyxKey={KEYS.SESSION}
+                    recorder={recorder}
+                />,
+            );
+
+            expect(framesOf(recorder)).toEqual([[{step: 1}, 'loaded']]);
+            await settle();
+            expect(framesOf(recorder)).toEqual([
+                [{step: 1}, 'loaded'],
+                [{step: 2}, 'loaded'],
+            ]);
+            expect(recorder.renders.length).toBeLessThanOrEqual(2);
         });
     });
 });

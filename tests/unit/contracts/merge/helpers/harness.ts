@@ -2,7 +2,7 @@
  * Shared Onyx setup for the merge contract tests: one key map, one init call, subscription recorders that
  * capture every delivered value, and a log capture for the alerts `Onyx.merge` raises.
  */
-import type {Connection} from '../../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../../lib/Onyx';
 import type {OnyxKey} from '../../../../../lib/types';
 
 import Onyx from '../../../../../lib';
@@ -48,12 +48,11 @@ type Recorder = {
 
 const openConnections: Connection[] = [];
 
-/** Subscribes with a fresh (never shared) connection and records every delivered value. */
+/** Subscribes and records every delivered value. */
 function record(key: OnyxKey): Recorder {
     const deliveries: Delivery[] = [];
     const connection = Onyx.connect({
         key,
-        reuseConnection: false,
         callback: (value: unknown, matchedKey: OnyxKey) => {
             deliveries.push({value, key: matchedKey});
         },

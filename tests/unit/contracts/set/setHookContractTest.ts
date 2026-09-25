@@ -1,7 +1,6 @@
 import {act, renderHook} from '@testing-library/react-native';
 import Onyx, {useOnyx} from '../../../../lib';
 import cache from '../../../../lib/OnyxCache';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const KEYS = {
@@ -38,8 +37,6 @@ describe('Onyx.set contract through useOnyx', () => {
 
     beforeEach(async () => {
         await Onyx.clear();
-        onyxSnapshotCache.clear();
-        onyxSnapshotCache.clearSelectorIds();
     });
 
     it('renders the written value, with the same reference the cache holds', async () => {

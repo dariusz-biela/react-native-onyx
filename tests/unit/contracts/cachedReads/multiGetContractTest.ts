@@ -48,7 +48,7 @@ describe('OnyxUtils.multiGet', () => {
 
     it('does not read storage a second time for keys a previous multiGet filled', async () => {
         const modules = await startOnyx({storedValues: {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}});
-        const {OnyxUtils, storage} = modules;
+        const {OnyxUtils, storage, subscriptions} = modules;
         makeCold(modules, REPORT_1);
         makeCold(modules, REPORT_2);
         await OnyxUtils.multiGet([REPORT_1, REPORT_2]);
@@ -62,7 +62,7 @@ describe('OnyxUtils.multiGet', () => {
         expect(Object.fromEntries(second)).toEqual({[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}});
         expect(third.get(REPORT_1)).toBe(second.get(REPORT_1));
         expect(third.get(REPORT_2)).toBe(second.get(REPORT_2));
-        expect(second.get(REPORT_1)).toBe(OnyxUtils.tryGetCachedValue(REPORT_1));
+        expect(second.get(REPORT_1)).toBe(subscriptions.getState(REPORT_1));
     });
 
     it('returns a nullish value for keys storage never had and remembers the miss for later reads', async () => {
@@ -183,10 +183,12 @@ describe('OnyxUtils.multiGet', () => {
         expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT)).toEqual({[REPORT_1]: {id: 1}});
         expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT_NESTED)).toEqual({[NESTED_1]: {id: 'nested'}});
     });
+});
 
-    it('delivers cold members to a collection subscriber that connects after they went cold', async () => {
+describe('current behaviour (#834 change)', () => {
+    it('delivers only the cached members to a collection subscriber that connects after they went cold, without reading storage', async () => {
         const modules = await startOnyx({storedValues: {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}, [NESTED_1]: {id: 'nested'}}});
-        const {Onyx} = modules;
+        const {Onyx, storage} = modules;
         makeCold(modules, REPORT_1);
         makeCold(modules, REPORT_2);
         const callback = jest.fn();
@@ -194,17 +196,20 @@ describe('OnyxUtils.multiGet', () => {
         Onyx.connect({key: KEYS.COLLECTION.REPORT, callback});
         await waitForPromisesToResolve();
 
-        expect(callback).toHaveBeenCalled();
-        expect(callback.mock.calls.at(-1)).toEqual([{[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}, KEYS.COLLECTION.REPORT]);
+        // main read the cold members from storage and delivered {report_1, report_2}.
+        expect(callback.mock.calls).toEqual([[{}, KEYS.COLLECTION.REPORT]]);
+        expect(keysReadFromStorage(storage)).toEqual([]);
     });
 
-    it('reads the members of a store another instance wrote after an empty boot', async () => {
+    it('does not see members another instance wrote to storage after an empty boot', async () => {
         const {Onyx, storage} = await startOnyx();
         await storage.multiSet([
             [REPORT_1, {id: 1}],
             [NESTED_1, {id: 'nested'}],
             [KEYS.RAM_ONLY, 'stale'],
         ]);
+        storage.getItem.mockClear();
+        storage.multiGet.mockClear();
         const reportCallback = jest.fn();
         const nestedCallback = jest.fn();
 
@@ -212,15 +217,17 @@ describe('OnyxUtils.multiGet', () => {
         Onyx.connect({key: KEYS.COLLECTION.REPORT_NESTED, callback: nestedCallback});
         await waitForPromisesToResolve();
 
-        expect(reportCallback.mock.calls.at(-1)).toEqual([{[REPORT_1]: {id: 1}}, KEYS.COLLECTION.REPORT]);
-        expect(nestedCallback.mock.calls.at(-1)).toEqual([{[NESTED_1]: {id: 'nested'}}, KEYS.COLLECTION.REPORT_NESTED]);
+        // main listed storage keys on connect and delivered {report_1} and {report_nested_1}.
+        expect(reportCallback.mock.calls).toEqual([[{}, KEYS.COLLECTION.REPORT]]);
+        expect(nestedCallback.mock.calls).toEqual([[{}, KEYS.COLLECTION.REPORT_NESTED]]);
+        expect(keysReadFromStorage(storage)).toEqual([]);
     });
 });
 
 describe('current behaviour (suspected bug)', () => {
     it('multiGet brings back a key that was removed while its storage read was in flight', async () => {
         const modules = await startOnyx({storedValues: {[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}}});
-        const {Onyx, OnyxUtils, storage} = modules;
+        const {Onyx, OnyxUtils, storage, subscriptions} = modules;
         makeCold(modules, REPORT_1);
         const release = holdNextMultiGet(storage);
 
@@ -234,7 +241,7 @@ describe('current behaviour (suspected bug)', () => {
         await expect(storage.getItem(REPORT_1)).resolves.toBeNull();
         // Expected: {report_2} only, since report_1 was removed after the read started.
         expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT)).toEqual({[REPORT_1]: {id: 1}, [REPORT_2]: {id: 2}});
-        expect(OnyxUtils.tryGetCachedValue(REPORT_1)).toEqual({id: 1});
+        expect(subscriptions.getState(REPORT_1)).toEqual({id: 1});
     });
 
     it('get brings back a key that was removed while its storage read was in flight', async () => {

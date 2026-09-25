@@ -1,9 +1,7 @@
 import Onyx from '../../../../lib';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
-import connectionManager from '../../../../lib/OnyxConnectionManager';
 import OnyxCache from '../../../../lib/OnyxCache';
-import OnyxUtils from '../../../../lib/OnyxUtils';
-import type {OnyxKey} from '../../../../lib/types';
+import onyxSubscriptionManager from '../../../../lib/OnyxSubscriptionManager';
+import type {Connection, OnyxKey} from '../../../../lib/types';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const KEYS = {
@@ -30,8 +28,8 @@ function valuesOf(spy: Spy): unknown[] {
     return spy.mock.calls.map(([value]) => value);
 }
 
-function connect(key: OnyxKey, callback: Spy, reuseConnection?: boolean): Connection {
-    return Onyx.connect({key, callback, reuseConnection});
+function connect(key: OnyxKey, callback: Spy): Connection {
+    return Onyx.connect({key, callback});
 }
 
 async function writeEverything(suffix: string): Promise<void> {
@@ -43,7 +41,7 @@ async function writeEverything(suffix: string): Promise<void> {
 }
 
 beforeEach(async () => {
-    connectionManager.disconnectAll();
+    onyxSubscriptionManager.clearAll();
     await Onyx.clear();
     await waitForPromisesToResolve();
 });
@@ -52,21 +50,13 @@ afterEach(() => {
     jest.restoreAllMocks();
 });
 
-function trackSubscriptions(): {opened: () => number[]; released: () => unknown[]} {
-    const subscribeSpy = jest.spyOn(OnyxUtils, 'subscribeToKey');
-    const unsubscribeSpy = jest.spyOn(OnyxUtils, 'unsubscribeFromKey');
-    return {
-        opened: () => subscribeSpy.mock.results.flatMap((result) => (result.type === 'return' ? [result.value] : [])),
-        released: () => unsubscribeSpy.mock.calls.map(([subscriptionID]) => subscriptionID),
-    };
-}
-
-describe('connectionManager.disconnectAll contracts', () => {
-    it('stops every live subscriber, shared or not, collection or member, from receiving any later write', async () => {
+// main pinned connectionManager.disconnectAll; #834 removed it and onyxSubscriptionManager.clearAll is its closest equivalent.
+describe('onyxSubscriptionManager.clearAll contracts', () => {
+    it('stops every live subscriber, collection or member, from receiving any later write', async () => {
         const spies = [createSpy(), createSpy(), createSpy(), createSpy(), createSpy(), createSpy()];
         connect(KEYS.PLAIN, spies[0]);
         connect(KEYS.PLAIN, spies[1]);
-        connect(KEYS.PLAIN, spies[2], false);
+        connect(KEYS.PLAIN, spies[2]);
         connect(KEYS.COLLECTION.ITEMS, spies[3]);
         connect(ITEM_1, spies[4]);
         connect(KEYS.WITH_DEFAULT, spies[5]);
@@ -75,7 +65,7 @@ describe('connectionManager.disconnectAll contracts', () => {
             spy.mockClear();
         }
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
         await writeEverything('after');
         await Onyx.clear();
         await waitForPromisesToResolve();
@@ -85,37 +75,19 @@ describe('connectionManager.disconnectAll contracts', () => {
         }
     });
 
-    it('releases the underlying subscription of every connection, reused or not, pending or established', async () => {
-        const subscriptions = trackSubscriptions();
+    it('removes the listener of every connection, whether its first delivery is pending or done', async () => {
         connect(KEYS.PLAIN, createSpy());
         connect(KEYS.PLAIN, createSpy());
-        connect(KEYS.PLAIN, createSpy(), false);
-        connect(KEYS.COLLECTION.ITEMS, createSpy(), false);
+        connect(KEYS.COLLECTION.ITEMS, createSpy());
         await waitForPromisesToResolve();
         connect(ITEM_1, createSpy());
-        connect(KEYS.OTHER, createSpy(), false);
+        connect(KEYS.OTHER, createSpy());
 
-        connectionManager.disconnectAll();
+        expect([KEYS.PLAIN, KEYS.COLLECTION.ITEMS, ITEM_1, KEYS.OTHER].map((key) => onyxSubscriptionManager.hasListenersForKey(key))).toEqual([true, true, true, true]);
 
-        expect(subscriptions.opened()).toHaveLength(5);
-        expect(subscriptions.released()).toEqual(expect.arrayContaining(subscriptions.opened()));
-    });
+        onyxSubscriptionManager.clearAll();
 
-    it('cancels first deliveries that were still pending in the same tick', async () => {
-        await Onyx.multiSet({[KEYS.PLAIN]: 'plain', [ITEM_1]: {v: 1}});
-        const plain = createSpy();
-        const collection = createSpy();
-        const unique = createSpy();
-
-        connect(KEYS.PLAIN, plain);
-        connect(KEYS.COLLECTION.ITEMS, collection);
-        connect(KEYS.PLAIN, unique, false);
-        connectionManager.disconnectAll();
-        await waitForPromisesToResolve();
-
-        expect(plain).not.toHaveBeenCalled();
-        expect(collection).not.toHaveBeenCalled();
-        expect(unique).not.toHaveBeenCalled();
+        expect([KEYS.PLAIN, KEYS.COLLECTION.ITEMS, ITEM_1, KEYS.OTHER].map((key) => onyxSubscriptionManager.hasListenersForKey(key))).toEqual([false, false, false, false]);
     });
 
     it('lets new subscribers connect afterwards and receive fresh values exactly once per change', async () => {
@@ -125,7 +97,7 @@ describe('connectionManager.disconnectAll contracts', () => {
         connect(KEYS.COLLECTION.ITEMS, createSpy());
         await waitForPromisesToResolve();
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
         await Onyx.set(KEYS.PLAIN, 'while-disconnected');
         const plain = createSpy();
         const collection = createSpy();
@@ -141,32 +113,31 @@ describe('connectionManager.disconnectAll contracts', () => {
             ['after', KEYS.PLAIN],
         ]);
         expect(collection.mock.calls).toEqual([
-            [undefined, KEYS.COLLECTION.ITEMS],
+            [{}, KEYS.COLLECTION.ITEMS],
             [{[ITEM_1]: {v: 1}}, KEYS.COLLECTION.ITEMS],
         ]);
     });
 
-    it('turns disconnecting a pre-disconnectAll handle into a no-op that leaves a newer connection to the same key alive', async () => {
+    it('turns disconnecting a pre-clearAll handle into a no-op that leaves a newer connection to the same key alive', async () => {
         const old = createSpy();
         const oldConnection = connect(KEYS.PLAIN, old);
         await waitForPromisesToResolve();
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
         const fresh = createSpy();
-        const freshConnection = connect(KEYS.PLAIN, fresh);
+        connect(KEYS.PLAIN, fresh);
         await waitForPromisesToResolve();
         Onyx.disconnect(oldConnection);
         await Onyx.set(KEYS.PLAIN, 'x');
 
-        expect(freshConnection.id).toBe(oldConnection.id);
         expect(valuesOf(old)).toEqual([undefined]);
         expect(valuesOf(fresh)).toEqual([undefined, 'x']);
     });
 
     it('can be called repeatedly and with no connections', async () => {
         expect(() => {
-            connectionManager.disconnectAll();
-            connectionManager.disconnectAll();
+            onyxSubscriptionManager.clearAll();
+            onyxSubscriptionManager.clearAll();
         }).not.toThrow();
 
         const spy = createSpy();
@@ -182,45 +153,49 @@ describe('connectionManager.disconnectAll contracts', () => {
         connect(KEYS.PLAIN, createSpy());
         await waitForPromisesToResolve();
 
-        connectionManager.disconnectAll();
+        onyxSubscriptionManager.clearAll();
 
         expect(OnyxCache.get(KEYS.PLAIN)).toBe('kept');
         expect(OnyxCache.get(ITEM_1)).toEqual({v: 1});
     });
+
+    describe('current behaviour (#834 change)', () => {
+        // main's disconnectAll cancelled first deliveries still pending in the same tick; clearAll only removes listeners.
+        it('does not cancel first deliveries that were still pending in the same tick, but stops every later write', async () => {
+            await Onyx.multiSet({[KEYS.PLAIN]: 'plain', [ITEM_1]: {v: 1}});
+            const plain = createSpy();
+            const collection = createSpy();
+            const second = createSpy();
+
+            connect(KEYS.PLAIN, plain);
+            connect(KEYS.COLLECTION.ITEMS, collection);
+            connect(KEYS.PLAIN, second);
+            onyxSubscriptionManager.clearAll();
+            await waitForPromisesToResolve();
+            await Onyx.set(KEYS.PLAIN, 'later');
+            await Onyx.set(ITEM_1, {v: 2});
+
+            expect(plain.mock.calls).toEqual([['plain', KEYS.PLAIN]]);
+            expect(collection.mock.calls).toEqual([[{[ITEM_1]: {v: 1}}, KEYS.COLLECTION.ITEMS]]);
+            expect(second.mock.calls).toEqual([['plain', KEYS.PLAIN]]);
+        });
+    });
 });
 
-describe('connectionManager.refreshSessionID contracts', () => {
-    it('keeps every connection made before the refresh receiving updates', async () => {
-        const shared = createSpy();
-        const collection = createSpy();
-        connect(KEYS.PLAIN, shared);
-        connect(KEYS.COLLECTION.ITEMS, collection);
-        await waitForPromisesToResolve();
-
-        connectionManager.refreshSessionID();
-        await Onyx.set(KEYS.PLAIN, 'x');
-        await Onyx.set(ITEM_1, {v: 1});
-
-        expect(valuesOf(shared)).toEqual([undefined, 'x']);
-        expect(valuesOf(collection)).toEqual([undefined, {[ITEM_1]: {v: 1}}]);
-    });
-
-    it('gives a subscriber connecting after the refresh its own connection, independent of the old one in both directions', async () => {
+// main pinned connectionManager.refreshSessionID here; #834 removed sessions, so only the independence they guaranteed is kept.
+describe('independent connections and Onyx.clear', () => {
+    it('keeps two connections to the same key independent of each other in both directions', async () => {
         const old = createSpy();
         const oldConnection = connect(KEYS.PLAIN, old);
         await waitForPromisesToResolve();
 
-        connectionManager.refreshSessionID();
         const fresh = createSpy();
         const freshConnection = connect(KEYS.PLAIN, fresh);
         await waitForPromisesToResolve();
 
-        expect(freshConnection.id).not.toBe(oldConnection.id);
-
         Onyx.disconnect(oldConnection);
         await Onyx.set(KEYS.PLAIN, 'only-fresh');
         const oldAgain = createSpy();
-        connectionManager.refreshSessionID();
         const oldAgainConnection = connect(KEYS.PLAIN, oldAgain);
         await waitForPromisesToResolve();
         Onyx.disconnect(freshConnection);
@@ -232,78 +207,60 @@ describe('connectionManager.refreshSessionID contracts', () => {
         Onyx.disconnect(oldAgainConnection);
     });
 
-    it('delivers a first value built from the store to a subscriber connecting after the refresh instead of the old connection cached arguments', async () => {
+    it('delivers a first value built from the store to a later subscriber instead of an earlier connection last arguments', async () => {
         const old = createSpy();
         connect(KEYS.PLAIN, old);
         await waitForPromisesToResolve();
         await Onyx.set(KEYS.PLAIN, 'x');
         await Onyx.set(KEYS.PLAIN, null);
 
-        connectionManager.refreshSessionID();
         const fresh = createSpy();
         connect(KEYS.PLAIN, fresh);
         await waitForPromisesToResolve();
 
+        // main delivered (undefined, undefined) as the first call to both subscribers here.
         expect(old.mock.calls).toEqual([
-            [undefined, undefined],
+            [undefined, KEYS.PLAIN],
             ['x', KEYS.PLAIN],
             [undefined, KEYS.PLAIN],
         ]);
-        expect(fresh.mock.calls).toEqual([[undefined, undefined]]);
+        expect(fresh.mock.calls).toEqual([[undefined, KEYS.PLAIN]]);
     });
 
-    it('lets disconnectAll tear down connections from before and after the refresh', async () => {
+    it('keeps an old connection working across Onyx.clear and gives a subscriber connecting after the clear its own first delivery', async () => {
+        await Onyx.set(KEYS.PLAIN, 'x');
         const old = createSpy();
-        const fresh = createSpy();
         connect(KEYS.PLAIN, old);
-        await waitForPromisesToResolve();
-        connectionManager.refreshSessionID();
-        connect(KEYS.PLAIN, fresh);
-        await waitForPromisesToResolve();
-
-        connectionManager.disconnectAll();
-        await Onyx.set(KEYS.PLAIN, 'x');
-
-        expect(valuesOf(old)).toEqual([undefined]);
-        expect(valuesOf(fresh)).toEqual([undefined]);
-    });
-
-    it('is triggered by Onyx.clear, so a subscriber connecting after the clear gets a fresh connection while the old one keeps working', async () => {
-        await Onyx.set(KEYS.PLAIN, 'x');
-        const old = createSpy();
-        const oldConnection = connect(KEYS.PLAIN, old);
         await waitForPromisesToResolve();
 
         await Onyx.clear();
         const fresh = createSpy();
-        const freshConnection = connect(KEYS.PLAIN, fresh);
+        connect(KEYS.PLAIN, fresh);
         await waitForPromisesToResolve();
         await Onyx.set(KEYS.PLAIN, 'y');
 
-        expect(freshConnection.id).not.toBe(oldConnection.id);
         expect(old.mock.calls).toEqual([
             ['x', KEYS.PLAIN],
             [undefined, KEYS.PLAIN],
             ['y', KEYS.PLAIN],
         ]);
+        // main delivered (undefined, undefined) as the first call here.
         expect(fresh.mock.calls).toEqual([
-            [undefined, undefined],
+            [undefined, KEYS.PLAIN],
             ['y', KEYS.PLAIN],
         ]);
     });
 
-    it('does not create a new connection for subscribers that join before the refresh', async () => {
+    it('keeps the other of two same-tick subscribers alive when one disconnects', async () => {
         const first = createSpy();
         const second = createSpy();
         const firstConnection = connect(KEYS.PLAIN, first);
-        const secondConnection = connect(KEYS.PLAIN, second);
-        connectionManager.refreshSessionID();
+        connect(KEYS.PLAIN, second);
         await waitForPromisesToResolve();
 
         Onyx.disconnect(firstConnection);
         await Onyx.set(KEYS.PLAIN, 'x');
 
-        expect(secondConnection.id).toBe(firstConnection.id);
         expect(valuesOf(first)).toEqual([undefined]);
         expect(valuesOf(second)).toEqual([undefined, 'x']);
     });

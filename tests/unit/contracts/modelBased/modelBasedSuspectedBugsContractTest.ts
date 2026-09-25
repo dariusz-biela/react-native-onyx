@@ -5,20 +5,17 @@ const {NEST, NEST_LEVEL} = ONYX_KEYS.COLLECTION;
 
 describe('Onyx write API as one system', () => {
     describe('current behaviour (suspected bug)', () => {
-        it('removes prefix-colliding child members on a parent setCollection without notifying their subscribers', async () => {
+        it('removes prefix-colliding child members on a parent setCollection without notifying their collection subscribers', async () => {
             const onyx = await bootOnyx({[`${NEST}1`]: {a: 1}, [`${NEST_LEVEL}1`]: {b: 1}});
             const observers = await observe(onyx);
-            const member = markTarget(observers, `${NEST_LEVEL}1`);
             const childCollection = markTarget(observers, NEST_LEVEL);
 
             await runAwaited(onyx, {kind: 'setCollection', collectionKey: NEST, data: {[`${NEST}1`]: {a: 1}}});
 
             expect(readCache(onyx)[`${NEST_LEVEL}1`]).toBeUndefined();
             expect(readStorage(onyx)[`${NEST_LEVEL}1`]).toBeUndefined();
-            // The member and its collection are gone from the store, yet every observer still shows them.
-            expect(member()).toEqual({connect: [], hook: []});
-            expect(childCollection()).toEqual({connect: [], hook: []});
-            expect(findHook(observers, `${NEST_LEVEL}1`).renders.at(-1)?.value).toEqual({b: 1});
+            // The member and its collection are gone from the store, yet the collection observers still show them.
+            expect(childCollection()).toStrictEqual({connect: [], hook: []});
             expect(findHook(observers, NEST_LEVEL).renders.at(-1)?.value).toEqual({[`${NEST_LEVEL}1`]: {b: 1}});
             unmountAll(observers);
         });
@@ -45,8 +42,11 @@ describe('Onyx write API as one system', () => {
             expect(member().connect).toEqual([[]]);
             unmountAll(observers);
         });
+    });
 
-        it('merges an update that sets a new member next to another member with an Onyx.merge issued before it in the same tick', async () => {
+    // Fixed by #834: main applied the later call first, as noted per test.
+    describe('writes issued in the same tick apply in call order', () => {
+        it('applies an update that sets a member after an Onyx.merge of it issued earlier in the same tick', async () => {
             const onyx = await bootOnyx({});
 
             await runTogether(onyx, [
@@ -60,12 +60,12 @@ describe('Onyx write API as one system', () => {
                 },
             ]);
 
-            // Applying the calls in order leaves nest_1 as {c: 2}.
-            expect(readCache(onyx)[`${NEST}1`]).toEqual({c: 2, x: 1});
-            expect(readStorage(onyx)[`${NEST}1`]).toEqual({c: 2, x: 1});
+            // main ended in {c: 2, x: 1}.
+            expect(readCache(onyx)[`${NEST}1`]).toEqual({c: 2});
+            expect(readStorage(onyx)[`${NEST}1`]).toEqual({c: 2});
         });
 
-        it('drops a mergeCollection removal of a member that an Onyx.merge created earlier in the same tick', async () => {
+        it('applies a mergeCollection removal of a member that an Onyx.merge created earlier in the same tick', async () => {
             const onyx = await bootOnyx({});
 
             await runTogether(onyx, [
@@ -73,12 +73,14 @@ describe('Onyx write API as one system', () => {
                 {kind: 'mergeCollection', collectionKey: NEST, data: {[`${NEST}1`]: null, [`${NEST}2`]: {y: 1}}},
             ]);
 
-            // Applying the calls in order removes nest_1.
-            expect(readCache(onyx)[`${NEST}1`]).toEqual({x: 1});
-            expect(readStorage(onyx)[`${NEST}1`]).toEqual({x: 1});
+            // main kept nest_1 as {x: 1}.
+            expect(readCache(onyx)[`${NEST}1`]).toBeUndefined();
+            expect(readStorage(onyx)[`${NEST}1`]).toBeUndefined();
+            expect(readCache(onyx)[`${NEST}2`]).toEqual({y: 1});
+            expect(readStorage(onyx)[`${NEST}2`]).toEqual({y: 1});
         });
 
-        it('lets a mergeCollection array replace an object that an Onyx.merge created earlier in the same tick', async () => {
+        it('rejects a mergeCollection array over an object that an Onyx.merge created earlier in the same tick', async () => {
             const onyx = await bootOnyx({});
 
             await runTogether(onyx, [
@@ -86,9 +88,24 @@ describe('Onyx write API as one system', () => {
                 {kind: 'mergeCollection', collectionKey: NEST, data: {[`${NEST}1`]: []}},
             ]);
 
-            // Applying the calls in order rejects the array and keeps {count: 1}.
-            expect(readCache(onyx)[`${NEST}1`]).toEqual([]);
-            expect(readStorage(onyx)[`${NEST}1`]).toEqual([]);
+            // main let the array replace the object.
+            expect(readCache(onyx)[`${NEST}1`]).toEqual({count: 1});
+            expect(readStorage(onyx)[`${NEST}1`]).toEqual({count: 1});
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        it('tells a prefix-colliding child member subscriber it is gone when a parent setCollection removes it', async () => {
+            const onyx = await bootOnyx({[`${NEST}1`]: {a: 1}, [`${NEST_LEVEL}1`]: {b: 1}});
+            const observers = await observe(onyx);
+            const member = markTarget(observers, `${NEST_LEVEL}1`);
+
+            await runAwaited(onyx, {kind: 'setCollection', collectionKey: NEST, data: {[`${NEST}1`]: {a: 1}}});
+
+            // main left the member connection and hook silent on {b: 1}.
+            expect(member()).toStrictEqual({connect: [undefined], hook: [undefined]});
+            expect(findHook(observers, `${NEST_LEVEL}1`).renders.at(-1)?.value).toBeUndefined();
+            unmountAll(observers);
         });
     });
 
@@ -124,8 +141,8 @@ describe('Onyx write API as one system', () => {
 
             await runAwaited(onyx, {kind: 'merge', key: `${NEST}1`, value: {name: [1, 2]}});
 
-            expect(member()).toEqual({connect: [], hook: []});
-            expect(collection()).toEqual({connect: [], hook: []});
+            expect(member()).toStrictEqual({connect: [], hook: []});
+            expect(collection()).toStrictEqual({connect: [], hook: []});
             unmountAll(observers);
         });
     });

@@ -25,6 +25,22 @@ describe('Onyx.clear with interleaved writes', () => {
             }
         });
 
+        it('are wiped for merges onto a key absent from the cache', async () => {
+            const {Onyx, cache, StorageMock} = await loadOnyx();
+            await seedAccount(Onyx);
+
+            Onyx.merge(KEYS.PLAIN_EXTENDED, 'merged onto a cached key');
+            Onyx.merge('uncachedKey', {first: 1});
+            Onyx.merge('uncachedKey', {second: 2});
+            await Onyx.clear();
+            await flush();
+
+            expect(cache.get(KEYS.PLAIN_EXTENDED)).toBeUndefined();
+            expect(cache.get('uncachedKey')).toBeUndefined();
+            expect(cache.hasCacheForKey('uncachedKey')).toBe(false);
+            expect(readStorage(StorageMock)).not.toHaveProperty('uncachedKey');
+        });
+
         it('are replaced by the initial state for a key that has one', async () => {
             const {Onyx, cache, StorageMock} = await loadOnyx();
 
@@ -186,23 +202,17 @@ describe('Onyx.clear with interleaved writes', () => {
     });
 
     describe('current behaviour (suspected bug)', () => {
-        it('lets merges issued before clear in the same tick on keys absent from the cache survive the clear', async () => {
+        it('lets mergeCollection and update merges issued before clear in the same tick survive the clear', async () => {
             const {Onyx, cache, StorageMock} = await loadOnyx();
             await seedAccount(Onyx);
 
-            Onyx.merge(KEYS.PLAIN_EXTENDED, 'merged onto a cached key');
-            Onyx.merge('uncachedKey', {first: 1});
-            Onyx.merge('uncachedKey', {second: 2});
             Onyx.mergeCollection(KEYS.COLLECTION.REPORT, {[REPORT_1]: {title: 'merged'}, [REPORT_3]: {reportID: '3'}});
             Onyx.update([{onyxMethod: 'merge', key: 'updatedKey', value: {updated: true}}]);
             await Onyx.clear();
             await flush();
 
-            expect(cache.get(KEYS.PLAIN_EXTENDED)).toBeUndefined();
             const storage = readStorage(StorageMock);
             // Merges that resolve after the clear pass land on the cleared store.
-            expect(cache.get('uncachedKey')).toEqual({first: 1, second: 2});
-            expect(storage.uncachedKey).toEqual({first: 1, second: 2});
             expect(cache.get(REPORT_1)).toEqual({title: 'merged'});
             expect(cache.get(REPORT_3)).toEqual({reportID: '3'});
             expect(storage[REPORT_3]).toEqual({reportID: '3'});

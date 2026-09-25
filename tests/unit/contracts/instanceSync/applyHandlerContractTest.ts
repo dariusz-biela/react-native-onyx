@@ -430,13 +430,19 @@ describe('Onyx.init instance sync handler', () => {
         });
 
         it('keeps delivering when one subscriber throws', async () => {
+            // Armed after settling: #834 no longer catches a throw on the initial fire (pinned in mergeCollectionContractTest).
+            let armed = false;
             tab.Onyx.connect({
                 key: KEYS.COLLECTION.TEST,
                 callback: () => {
+                    if (!armed) {
+                        return;
+                    }
                     throw new Error('subscriber failed');
                 },
             });
             await settle();
+            armed = true;
             const member = await recordSettled('test_1');
             const collection = await recordSettled(KEYS.COLLECTION.TEST);
 

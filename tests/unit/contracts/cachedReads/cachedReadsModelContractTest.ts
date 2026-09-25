@@ -163,7 +163,7 @@ describe('cached reads under a random write sequence', () => {
         const random = createRandom(seed);
         const initial: Record<string, Fields> = {[REPORT_MEMBERS[0]]: {a: 1}, [NESTED_MEMBER]: {a: 1}, [ACTIONS_MEMBER]: {a: 1}, [KEYS.PLAIN]: {a: 1}};
         const modules = await startOnyx({storedValues: {...initial, [KEYS.PLAIN_2]: 'untouched'}});
-        const {OnyxUtils} = modules;
+        const {OnyxUtils, subscriptions} = modules;
         const model: Model = new Map(Object.entries(initial));
         const history: string[] = [];
 
@@ -185,9 +185,9 @@ describe('cached reads under a random write sequence', () => {
                 const actual = OnyxUtils.getCachedCollection(collectionKey);
                 const expected = expectedCollection(model, collectionKey);
                 expect({context, collectionKey, actual}).toEqual({context, collectionKey, actual: expected});
-                expect(OnyxUtils.tryGetCachedValue(collectionKey)).toBe(actual);
+                expect(subscriptions.getState(collectionKey)).toBe(actual);
                 for (const member of Object.keys(actual)) {
-                    expect({context, same: actual[member] === OnyxUtils.tryGetCachedValue(member)}).toEqual({context, same: true});
+                    expect({context, same: actual[member] === subscriptions.getState(member)}).toEqual({context, same: true});
                 }
 
                 const unchanged = JSON.stringify(previousExpected.get(collectionKey)) === JSON.stringify(expected);
@@ -200,7 +200,7 @@ describe('cached reads under a random write sequence', () => {
                     expect({context, collectionKey, newReference: actual !== previous.get(collectionKey)}).toEqual({context, collectionKey, newReference: true});
                 }
             }
-            expect({context, plain: OnyxUtils.tryGetCachedValue(KEYS.PLAIN)}).toEqual({context, plain: model.get(KEYS.PLAIN)});
+            expect({context, plain: subscriptions.getState(KEYS.PLAIN)}).toEqual({context, plain: model.get(KEYS.PLAIN)});
         }
     });
 });
@@ -214,7 +214,7 @@ describe('current behaviour (suspected bug)', () => {
         ['merge null', null, {a: 2}],
         ['set null', null, {a: 2}],
     ] as const)('a mergeCollection lands after a %s of the same member issued later in the same tick', async (kind, value, currentResult) => {
-        const {Onyx, OnyxUtils, storage} = await startOnyx({storedValues: {[REPORT_4]: {b: 2, c: 1}, [KEYS.PLAIN]: 'plain'}});
+        const {Onyx, OnyxUtils, storage, subscriptions} = await startOnyx({storedValues: {[REPORT_4]: {b: 2, c: 1}, [KEYS.PLAIN]: 'plain'}});
 
         const mergeCollection = Onyx.mergeCollection(KEYS.COLLECTION.REPORT, {[REPORT_4]: {a: 2}});
         const later = kind.startsWith('set') ? Onyx.set(REPORT_4, value) : Onyx.merge(REPORT_4, value);
@@ -222,7 +222,7 @@ describe('current behaviour (suspected bug)', () => {
         await waitForPromisesToResolve();
 
         // Expected: the later write wins (set/null replace, merge applies on top), like merge then set does.
-        expect(OnyxUtils.tryGetCachedValue(REPORT_4)).toEqual(currentResult);
+        expect(subscriptions.getState(REPORT_4)).toEqual(currentResult);
         expect(OnyxUtils.getCachedCollection(KEYS.COLLECTION.REPORT)).toEqual({[REPORT_4]: currentResult});
         await expect(storage.getItem(REPORT_4)).resolves.toEqual(currentResult);
     });

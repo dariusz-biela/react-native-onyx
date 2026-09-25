@@ -51,8 +51,8 @@ describe('Onyx.update skips invalid entries', () => {
         const expected = {...WITH_DEFAULT, ...INITIAL, [`${A}2`]: {before: true}, [TEST]: {a: 1, after: true}};
         expect(readCache()).toEqual(expected);
         expect(readStorage()).toEqual(expected);
-        expect(collectionMember.calls).toEqual([]);
-        expect(otherCollectionMember.calls).toEqual([]);
+        expect(collectionMember.calls).toStrictEqual([]);
+        expect(otherCollectionMember.calls).toStrictEqual([]);
     });
 
     it('resolves for a batch of only invalid entries without changing anything', async () => {
@@ -63,6 +63,6 @@ describe('Onyx.update skips invalid entries', () => {
 
         expect(readCache()).toEqual({...WITH_DEFAULT, ...INITIAL});
         expect(readStorage()).toEqual({...WITH_DEFAULT, ...INITIAL});
-        expect(subscriber.calls).toEqual([]);
+        expect(subscriber.calls).toStrictEqual([]);
     });
 });

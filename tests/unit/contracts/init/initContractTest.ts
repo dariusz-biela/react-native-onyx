@@ -4,10 +4,10 @@ import type OnyxDefault from '../../../../lib';
 import type {useOnyx as useOnyxHook} from '../../../../lib';
 import type * as LoggerModule from '../../../../lib/Logger';
 import type OnyxCacheDefault from '../../../../lib/OnyxCache';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type OnyxSubscriptionManagerDefault from '../../../../lib/OnyxSubscriptionManager';
 import type OnyxUtilsDefault from '../../../../lib/OnyxUtils';
 import type StorageMockDefault from '../../../../lib/storage/__mocks__';
-import type {InitOptions, OnyxKey} from '../../../../lib/types';
+import type {Connection, InitOptions, OnyxKey} from '../../../../lib/types';
 
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
@@ -34,6 +34,7 @@ type FreshOnyx = {
     useOnyx: typeof useOnyxHook;
     OnyxUtils: typeof OnyxUtilsDefault;
     cache: typeof OnyxCacheDefault;
+    subscriptions: typeof OnyxSubscriptionManagerDefault;
     storage: typeof StorageMockDefault;
     Logger: typeof LoggerModule;
 };
@@ -59,6 +60,7 @@ function loadFreshOnyx(): FreshOnyx {
     const onyxModule: {default: typeof OnyxDefault; useOnyx: typeof useOnyxHook} = require('../../../../lib');
     const onyxUtilsModule: {default: typeof OnyxUtilsDefault} = require('../../../../lib/OnyxUtils');
     const cacheModule: {default: typeof OnyxCacheDefault} = require('../../../../lib/OnyxCache');
+    const subscriptionsModule: {default: typeof OnyxSubscriptionManagerDefault} = require('../../../../lib/OnyxSubscriptionManager');
     const storageModule: {default: typeof StorageMockDefault} = require('../../../../lib/storage');
     const loggerModule: typeof LoggerModule = require('../../../../lib/Logger');
 
@@ -67,6 +69,7 @@ function loadFreshOnyx(): FreshOnyx {
         useOnyx: onyxModule.useOnyx,
         OnyxUtils: onyxUtilsModule.default,
         cache: cacheModule.default,
+        subscriptions: subscriptionsModule.default,
         storage: storageModule.default,
         Logger: loggerModule,
     };
@@ -260,28 +263,6 @@ describe('Onyx.init contract', () => {
             expect(collection.values).toEqual([{[`${KEYS.COLLECTION.TEST}1`]: {id: 1}}]);
         });
 
-        it('delivers undefined once to a collection subscriber when the collection is empty', async () => {
-            fresh.storage.setMockStore({[KEYS.PLAIN]: 'not a member'});
-
-            await initAndSettle(fresh);
-            const collection = record(fresh, KEYS.COLLECTION.TEST);
-            await waitForPromisesToResolve();
-
-            expect(collection.values).toEqual([undefined]);
-            expect(collection.keys).toEqual([KEYS.COLLECTION.TEST]);
-        });
-
-        it('delivers undefined once to a collection subscriber when storage is completely empty', async () => {
-            await initAndSettle(fresh);
-            const collection = record(fresh, KEYS.COLLECTION.TEST);
-            const plain = record(fresh, KEYS.PLAIN);
-            await waitForPromisesToResolve();
-
-            expect(collection.values).toEqual([undefined]);
-            expect(plain.values).toEqual([undefined]);
-            expect(fresh.cache.getAllKeys().size).toBe(0);
-        });
-
         it('hands the same collection reference to subscribers when nothing changed in between', async () => {
             fresh.storage.setMockStore({[`${KEYS.COLLECTION.TEST}1`]: {id: 1}, [`${KEYS.COLLECTION.TEST}2`]: {id: 2}});
 
@@ -289,7 +270,7 @@ describe('Onyx.init contract', () => {
             const first = record(fresh, KEYS.COLLECTION.TEST);
             await waitForPromisesToResolve();
             const secondValues: unknown[] = [];
-            fresh.Onyx.connect({key: KEYS.COLLECTION.TEST, reuseConnection: false, callback: (value) => secondValues.push(value)});
+            fresh.Onyx.connect({key: KEYS.COLLECTION.TEST, callback: (value) => secondValues.push(value)});
             await waitForPromisesToResolve();
 
             expect(first.values).toHaveLength(1);
@@ -304,7 +285,7 @@ describe('Onyx.init contract', () => {
             await initAndSettle(fresh);
 
             expect(fresh.cache.get(KEYS.OBJECT)).toBe(fresh.cache.get(KEYS.OBJECT));
-            expect(fresh.OnyxUtils.tryGetCachedValue(KEYS.OBJECT)).toBe(fresh.cache.get(KEYS.OBJECT));
+            expect(fresh.subscriptions.getState(KEYS.OBJECT)).toBe(fresh.cache.get(KEYS.OBJECT));
         });
 
         it('lets a useOnyx hook mounted after init render the stored value on its first render', async () => {
@@ -410,25 +391,6 @@ describe('Onyx.init contract', () => {
             expect(plain.values).toEqual(['default']);
         });
 
-        it('delivers defaults to early subscribers before the deferred init task resolves', async () => {
-            const getAll = createDeferred<Array<[OnyxKey, unknown]>>();
-            fresh.storage.getAll.mockImplementationOnce(() => getAll.promise);
-            const plain = record(fresh, KEYS.PLAIN);
-            const seenWhileUnresolved: boolean[] = [];
-            fresh.Onyx.connect({key: KEYS.OTHER, callback: () => seenWhileUnresolved.push(!isInitResolved(fresh))});
-
-            fresh.Onyx.init(initOptions({initialKeyStates: {[KEYS.PLAIN]: 'default', [KEYS.OTHER]: 'other default'}}));
-            await waitForPromisesToResolve();
-            expect(plain.values).toEqual([]);
-
-            getAll.resolve([]);
-            await waitForPromisesToResolve();
-
-            expect(plain.values).toEqual(['default']);
-            expect(seenWhileUnresolved).toEqual([true]);
-            expect(isInitResolved(fresh)).toBe(true);
-        });
-
         it('does not call a subscriber when the default key is not the one it listens to', async () => {
             const other = record(fresh, KEYS.OTHER);
 
@@ -436,24 +398,6 @@ describe('Onyx.init contract', () => {
             await waitForPromisesToResolve();
 
             expect(other.values).toEqual([undefined]);
-        });
-
-        it('lets a useOnyx hook mounted before init go from loading to the default value', async () => {
-            const renders: Array<{value: unknown; status: string}> = [];
-            renderHook(() => {
-                const [value, metadata] = fresh.useOnyx(KEYS.OBJECT);
-                renders.push({value, status: metadata.status});
-            });
-
-            expect(renders[0]).toEqual({value: undefined, status: 'loading'});
-
-            fresh.storage.setMockStore({[KEYS.OBJECT]: {stored: 1}});
-            fresh.Onyx.init(initOptions({initialKeyStates: {[KEYS.OBJECT]: {fromDefault: 1}}}));
-            await act(async () => waitForPromisesToResolve());
-
-            expect(renders.at(-1)).toEqual({value: {stored: 1, fromDefault: 1}, status: 'loaded'});
-            const loadedRenders = renders.filter((render) => render.status === 'loaded');
-            expect(loadedRenders.every((render) => JSON.stringify(render.value) === JSON.stringify({stored: 1, fromDefault: 1}))).toBe(true);
         });
     });
 
@@ -529,23 +473,22 @@ describe('Onyx.init contract', () => {
             expect(plain.values).toEqual([]);
         });
 
-        it('keep init going when one subscriber throws during the default notification', async () => {
-            const alertSpy = jest.spyOn(fresh.Logger, 'logAlert').mockImplementation(() => undefined);
-            fresh.Onyx.connect({
-                key: KEYS.PLAIN,
-                callback: () => {
-                    throw new Error('subscriber failure');
-                },
-            });
-            const other = record(fresh, KEYS.OTHER);
+        it('tell early subscribers the value the cache holds when a default null meets a stored field', async () => {
+            fresh.storage.setMockStore({[KEYS.OBJECT]: {a: 1, removed: 'stored', nested: {gone: 1, kept: 2}}});
+            const object = record(fresh, KEYS.OBJECT);
 
-            await initAndSettle(fresh, {initialKeyStates: {[KEYS.PLAIN]: 'default', [KEYS.OTHER]: 'other default'}});
-            await fresh.Onyx.set(KEYS.OBJECT, {after: true});
+            await initAndSettle(fresh, {initialKeyStates: {[KEYS.OBJECT]: {removed: null, nested: {gone: null}}}});
 
-            expect(other.values).toEqual(['other default']);
-            expect(isInitResolved(fresh)).toBe(true);
-            expect(fresh.cache.get(KEYS.OBJECT)).toEqual({after: true});
-            expect(alertSpy).toHaveBeenCalled();
+            expect(object.values).toEqual([{a: 1, removed: 'stored', nested: {gone: 1, kept: 2}}]);
+            expect(fresh.cache.get(KEYS.OBJECT)).toEqual({a: 1, removed: 'stored', nested: {gone: 1, kept: 2}});
+        });
+
+        it('call an early subscriber once when the default has a nested object', async () => {
+            const object = record(fresh, KEYS.OBJECT);
+
+            await initAndSettle(fresh, {initialKeyStates: {[KEYS.OBJECT]: {nested: {a: 1}}}});
+
+            expect(object.values).toEqual([{nested: {a: 1}}]);
         });
 
         it('let a subscriber write from its default notification and have the write applied after init', async () => {
@@ -752,19 +695,6 @@ describe('Onyx.init contract', () => {
         });
     });
 
-    describe('storage read failure, early subscribers', () => {
-        it('notifies early subscribers of the defaults before init resolves', async () => {
-            jest.spyOn(fresh.Logger, 'logAlert').mockImplementation(() => undefined);
-            fresh.storage.getAll.mockImplementationOnce(() => Promise.reject(new Error('disk gone')));
-            const resolvedAtCallback: boolean[] = [];
-            fresh.Onyx.connect({key: KEYS.PLAIN, callback: () => resolvedAtCallback.push(isInitResolved(fresh))});
-
-            await initAndSettle(fresh, {initialKeyStates: {[KEYS.PLAIN]: 'default'}});
-
-            expect(resolvedAtCallback).toEqual([false]);
-        });
-    });
-
     describe('enableDevTools', () => {
         it('hands the initial key states to the Redux DevTools extension', async () => {
             const devToolsInit = jest.fn();
@@ -813,24 +743,6 @@ describe('Onyx.init contract', () => {
             expect(storedValue(fresh, KEYS.PLAIN)).toBe('persisted');
         });
 
-        it('ignores stale stored RAM-only values while keeping stored neighbours', async () => {
-            fresh.storage.setMockStore({
-                [KEYS.RAM_ONLY]: 'stale',
-                [`${KEYS.COLLECTION.RAM_ONLY}1`]: {stale: true},
-                [KEYS.PLAIN]: 'stored',
-            });
-            const ram = record(fresh, KEYS.RAM_ONLY);
-            const ramCollection = record(fresh, KEYS.COLLECTION.RAM_ONLY);
-
-            await initAndSettle(fresh, {ramOnlyKeys});
-
-            expect(ram.values).toEqual([undefined]);
-            expect(ramCollection.values).toEqual([undefined]);
-            expect(fresh.cache.get(KEYS.PLAIN)).toBe('stored');
-            expect(fresh.cache.getAllKeys().has(KEYS.RAM_ONLY)).toBe(false);
-            expect(storedValue(fresh, KEYS.RAM_ONLY)).toBe('stale');
-        });
-
         it('persists keys that merely share a prefix with a RAM-only plain key', async () => {
             await initAndSettle(fresh, {ramOnlyKeys: [KEYS.NVP]});
 
@@ -844,27 +756,6 @@ describe('Onyx.init contract', () => {
 
     describe('skippableCollectionMemberIDs', () => {
         const skippable = `${KEYS.COLLECTION.TEST}${SKIP_ID}`;
-
-        it('does not hydrate skipped members but keeps them in storage', async () => {
-            fresh.storage.setMockStore({
-                [skippable]: {skipped: true},
-                [`${KEYS.COLLECTION.TEST}1`]: {id: 1},
-                [`${KEYS.COLLECTION.TEST_LEVEL}${SKIP_ID}`]: {skipped: true},
-            });
-            const member = record(fresh, skippable);
-            const collection = record(fresh, KEYS.COLLECTION.TEST);
-            const level = record(fresh, KEYS.COLLECTION.TEST_LEVEL);
-
-            await initAndSettle(fresh, {skippableCollectionMemberIDs: [SKIP_ID]});
-
-            expect(fresh.cache.get(skippable)).toBeUndefined();
-            expect(fresh.cache.getAllKeys().has(skippable)).toBe(false);
-            expect(fresh.cache.getAllKeys().has(`${KEYS.COLLECTION.TEST_LEVEL}${SKIP_ID}`)).toBe(false);
-            expect(member.values).toEqual([undefined]);
-            expect(collection.values).toEqual([{[`${KEYS.COLLECTION.TEST}1`]: {id: 1}}]);
-            expect(level.values).toEqual([undefined]);
-            expect(storedValue(fresh, skippable)).toEqual({skipped: true});
-        });
 
         it('only skips exact member IDs of registered collections', async () => {
             fresh.storage.setMockStore({
@@ -1063,21 +954,6 @@ describe('Onyx.init contract', () => {
         });
     });
 
-    describe('keys option', () => {
-        it('only treats keys listed under COLLECTION as collections', async () => {
-            fresh.storage.setMockStore({[`${KEYS.COLLECTION.TEST}1`]: {id: 1}, unlisted_1: {id: 'unlisted'}});
-
-            await initAndSettle(fresh);
-            const listed = record(fresh, KEYS.COLLECTION.TEST);
-            const unlisted = record(fresh, 'unlisted_');
-            await waitForPromisesToResolve();
-
-            expect(listed.values).toEqual([{[`${KEYS.COLLECTION.TEST}1`]: {id: 1}}]);
-            expect(unlisted.values).toEqual([undefined]);
-            expect(unlisted.keys).toEqual([undefined]);
-        });
-    });
-
     describe('shouldSyncMultipleInstances', () => {
         it('registers the cross-instance listener only when enabled', async () => {
             await initAndSettle(fresh, {shouldSyncMultipleInstances: false});
@@ -1187,28 +1063,167 @@ describe('Onyx.init contract', () => {
         });
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        it('tells early subscribers a default null removed a stored field while the cache keeps it', async () => {
-            fresh.storage.setMockStore({[KEYS.OBJECT]: {a: 1, removed: 'stored', nested: {gone: 1, kept: 2}}});
-            const object = record(fresh, KEYS.OBJECT);
+    describe('current behaviour (#834 change)', () => {
+        it('delivers an empty object once to a collection subscriber when the collection is empty', async () => {
+            fresh.storage.setMockStore({[KEYS.PLAIN]: 'not a member'});
 
-            await initAndSettle(fresh, {initialKeyStates: {[KEYS.OBJECT]: {removed: null, nested: {gone: null}}}});
+            await initAndSettle(fresh);
+            const collection = record(fresh, KEYS.COLLECTION.TEST);
+            await waitForPromisesToResolve();
 
-            expect(object.values).toEqual([
-                {a: 1, nested: {kept: 2}},
-                {a: 1, removed: 'stored', nested: {gone: 1, kept: 2}},
+            // main delivered undefined.
+            expect(collection.values).toEqual([{}]);
+            expect(collection.keys).toEqual([KEYS.COLLECTION.TEST]);
+        });
+
+        it('delivers an empty object once to a collection subscriber when storage is completely empty', async () => {
+            await initAndSettle(fresh);
+            const collection = record(fresh, KEYS.COLLECTION.TEST);
+            const plain = record(fresh, KEYS.PLAIN);
+            await waitForPromisesToResolve();
+
+            // main delivered undefined to the collection subscriber.
+            expect(collection.values).toEqual([{}]);
+            expect(plain.values).toEqual([undefined]);
+            expect(fresh.cache.getAllKeys().size).toBe(0);
+        });
+
+        it('ignores stale stored RAM-only values while keeping stored neighbours, and delivers an empty RAM-only collection', async () => {
+            fresh.storage.setMockStore({
+                [KEYS.RAM_ONLY]: 'stale',
+                [`${KEYS.COLLECTION.RAM_ONLY}1`]: {stale: true},
+                [KEYS.PLAIN]: 'stored',
+            });
+            const ram = record(fresh, KEYS.RAM_ONLY);
+            const ramCollection = record(fresh, KEYS.COLLECTION.RAM_ONLY);
+
+            await initAndSettle(fresh, {ramOnlyKeys: [KEYS.RAM_ONLY, KEYS.RAM_ONLY_DEFAULT, KEYS.COLLECTION.RAM_ONLY]});
+
+            expect(ram.values).toEqual([undefined]);
+            // main delivered undefined to the collection subscriber.
+            expect(ramCollection.values).toEqual([{}]);
+            expect(fresh.cache.get(KEYS.PLAIN)).toBe('stored');
+            expect(fresh.cache.getAllKeys().has(KEYS.RAM_ONLY)).toBe(false);
+            expect(storedValue(fresh, KEYS.RAM_ONLY)).toBe('stale');
+        });
+
+        it('does not hydrate skipped members but keeps them in storage, and delivers an empty collection when only skipped members are stored', async () => {
+            const skippable = `${KEYS.COLLECTION.TEST}${SKIP_ID}`;
+            fresh.storage.setMockStore({
+                [skippable]: {skipped: true},
+                [`${KEYS.COLLECTION.TEST}1`]: {id: 1},
+                [`${KEYS.COLLECTION.TEST_LEVEL}${SKIP_ID}`]: {skipped: true},
+            });
+            const member = record(fresh, skippable);
+            const collection = record(fresh, KEYS.COLLECTION.TEST);
+            const level = record(fresh, KEYS.COLLECTION.TEST_LEVEL);
+
+            await initAndSettle(fresh, {skippableCollectionMemberIDs: [SKIP_ID]});
+
+            expect(fresh.cache.get(skippable)).toBeUndefined();
+            expect(fresh.cache.getAllKeys().has(skippable)).toBe(false);
+            expect(fresh.cache.getAllKeys().has(`${KEYS.COLLECTION.TEST_LEVEL}${SKIP_ID}`)).toBe(false);
+            expect(member.values).toEqual([undefined]);
+            expect(collection.values).toEqual([{[`${KEYS.COLLECTION.TEST}1`]: {id: 1}}]);
+            // main delivered undefined to the level subscriber.
+            expect(level.values).toEqual([{}]);
+            expect(storedValue(fresh, skippable)).toEqual({skipped: true});
+        });
+
+        it('delivers defaults to early subscribers only after the deferred init task resolves', async () => {
+            const getAll = createDeferred<Array<[OnyxKey, unknown]>>();
+            fresh.storage.getAll.mockImplementationOnce(() => getAll.promise);
+            const plain = record(fresh, KEYS.PLAIN);
+            const seenWhileUnresolved: boolean[] = [];
+            fresh.Onyx.connect({key: KEYS.OTHER, callback: () => seenWhileUnresolved.push(!isInitResolved(fresh))});
+
+            fresh.Onyx.init(initOptions({initialKeyStates: {[KEYS.PLAIN]: 'default', [KEYS.OTHER]: 'other default'}}));
+            await waitForPromisesToResolve();
+            expect(plain.values).toEqual([]);
+
+            getAll.resolve([]);
+            await waitForPromisesToResolve();
+
+            expect(plain.values).toEqual(['default']);
+            // main notified early subscribers before the deferred init task resolved.
+            expect(seenWhileUnresolved).toEqual([false]);
+            expect(isInitResolved(fresh)).toBe(true);
+        });
+
+        it('notifies early subscribers of the defaults only after init resolves when the storage read fails', async () => {
+            jest.spyOn(fresh.Logger, 'logAlert').mockImplementation(() => undefined);
+            fresh.storage.getAll.mockImplementationOnce(() => Promise.reject(new Error('disk gone')));
+            const resolvedAtCallback: boolean[] = [];
+            fresh.Onyx.connect({key: KEYS.PLAIN, callback: () => resolvedAtCallback.push(isInitResolved(fresh))});
+
+            await initAndSettle(fresh, {initialKeyStates: {[KEYS.PLAIN]: 'default'}});
+
+            // main notified them before init resolved.
+            expect(resolvedAtCallback).toEqual([true]);
+        });
+
+        it('lets a useOnyx hook mounted before init render loaded with no value, then the default value', async () => {
+            const renders: Array<{value: unknown; status: string}> = [];
+            renderHook(() => {
+                const [value, metadata] = fresh.useOnyx(KEYS.OBJECT);
+                renders.push({value, status: metadata.status});
+            });
+
+            // main rendered 'loading' until init delivered the value.
+            expect(renders).toEqual([{value: undefined, status: 'loaded'}]);
+
+            fresh.storage.setMockStore({[KEYS.OBJECT]: {stored: 1}});
+            fresh.Onyx.init(initOptions({initialKeyStates: {[KEYS.OBJECT]: {fromDefault: 1}}}));
+            await act(async () => waitForPromisesToResolve());
+
+            expect(renders).toEqual([
+                {value: undefined, status: 'loaded'},
+                {value: {stored: 1, fromDefault: 1}, status: 'loaded'},
             ]);
-            expect(fresh.cache.get(KEYS.OBJECT)).toEqual({a: 1, removed: 'stored', nested: {gone: 1, kept: 2}});
         });
 
-        it('calls an early subscriber twice with equal values when the default has a nested object', async () => {
-            const object = record(fresh, KEYS.OBJECT);
+        it('keeps init going when a subscriber connected before init throws on a notification after its default one', async () => {
+            const alertSpy = jest.spyOn(fresh.Logger, 'logAlert').mockImplementation(() => undefined);
+            const thrower: unknown[] = [];
+            // main also caught a throw from the default notification; #834 lets that one escape as an unhandled rejection.
+            fresh.Onyx.connect({
+                key: KEYS.PLAIN,
+                callback: (value) => {
+                    thrower.push(value);
+                    if (thrower.length > 1) {
+                        throw new Error('subscriber failure');
+                    }
+                },
+            });
+            const other = record(fresh, KEYS.OTHER);
 
-            await initAndSettle(fresh, {initialKeyStates: {[KEYS.OBJECT]: {nested: {a: 1}}}});
+            await initAndSettle(fresh, {initialKeyStates: {[KEYS.PLAIN]: 'default', [KEYS.OTHER]: 'other default'}});
+            await fresh.Onyx.set(KEYS.PLAIN, 'later');
+            await fresh.Onyx.set(KEYS.OBJECT, {after: true});
 
-            expect(object.values).toEqual([{nested: {a: 1}}, {nested: {a: 1}}]);
+            expect(thrower).toEqual(['default', 'later']);
+            expect(other.values).toEqual(['other default']);
+            expect(isInitResolved(fresh)).toBe(true);
+            expect(fresh.cache.get(KEYS.OBJECT)).toEqual({after: true});
+            expect(alertSpy).toHaveBeenCalledTimes(1);
         });
 
+        it('only treats keys listed under COLLECTION as collections, and hands an unlisted prefix subscriber its own key', async () => {
+            fresh.storage.setMockStore({[`${KEYS.COLLECTION.TEST}1`]: {id: 1}, unlisted_1: {id: 'unlisted'}});
+
+            await initAndSettle(fresh);
+            const listed = record(fresh, KEYS.COLLECTION.TEST);
+            const unlisted = record(fresh, 'unlisted_');
+            await waitForPromisesToResolve();
+
+            expect(listed.values).toEqual([{[`${KEYS.COLLECTION.TEST}1`]: {id: 1}}]);
+            expect(unlisted.values).toEqual([undefined]);
+            // main passed undefined as the callback key here.
+            expect(unlisted.keys).toEqual(['unlisted_']);
+        });
+    });
+
+    describe('current behaviour (suspected bug)', () => {
         it('lets a stale storage read during re-init overwrite leaves of a newer write while keeping its other fields', async () => {
             await initAndSettle(fresh);
             const getAll = createDeferred<Array<[OnyxKey, unknown]>>();

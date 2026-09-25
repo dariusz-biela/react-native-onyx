@@ -91,26 +91,6 @@ describe('useOnyx selector results shared between hooks', () => {
         expect(statusesOf([lastCommit(loaded)])).toEqual([[undefined, 'loaded']]);
     });
 
-    it('never commits the value from before pending merges to a hook that mounts while they are queued', async () => {
-        await Onyx.set(KEYS.PLAIN, {name: 'zero'});
-        Onyx.merge(KEYS.PLAIN, {name: 'first'});
-        Onyx.merge(KEYS.PLAIN, {name: 'second'});
-        const recorders = createRecorders<unknown>(HOOK_COUNT);
-        render(
-            <SelectorProbeList
-                onyxKey={KEYS.PLAIN}
-                selector={selectName}
-                recorders={recorders}
-            />,
-        );
-        await settle();
-
-        for (const recorder of recorders) {
-            expect(committedValues(recorder)).not.toContain('zero');
-            expect(statusesOf([lastCommit(recorder)])).toEqual([['second', 'loaded']]);
-        }
-    });
-
     it('never commits a stale selected value when a hook switches to a key whose previous consumers have all unmounted', async () => {
         await Onyx.multiSet({[KEYS.PLAIN]: {name: 'plain'}, [KEYS.OTHER]: {name: 'other-1'}});
         const earlier = createRecorder<unknown>();
@@ -183,22 +163,50 @@ describe('useOnyx selector results shared between hooks', () => {
         expect(renderCounts(recorders).slice(1)).toEqual(rendersBefore.slice(1));
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        it('stays loading forever when a lone hook mounts during a merge that leaves its selected output undefined', async () => {
-            await Onyx.set(KEYS.PLAIN, {count: 1});
-            const pendingMerge = Onyx.merge(KEYS.PLAIN, {count: 2});
-            const recorder = createRecorder<unknown>();
+    it('reports loaded with the selected output of the merged value when a lone hook mounts during a merge that leaves the output undefined', async () => {
+        await Onyx.set(KEYS.PLAIN, {count: 1});
+        const pendingMerge = Onyx.merge(KEYS.PLAIN, {count: 2});
+        const recorder = createRecorder<unknown>();
+        render(
+            <SelectorProbe
+                onyxKey={KEYS.PLAIN}
+                selector={selectName}
+                recorder={recorder}
+            />,
+        );
+        await write(() => pendingMerge);
+        await write(() => Onyx.merge(KEYS.PLAIN, {count: 3}));
+
+        expect(statusesOf(recorder.commits)).toEqual([[undefined, 'loaded']]);
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // On main every hook committed only [second, loaded]: it stayed loading until the queued merges were applied.
+        it('commits the cached value from before pending merges as loaded to a hook that mounts while they are queued, then the merged value', async () => {
+            await Onyx.set(KEYS.PLAIN, {name: 'zero'});
+            Onyx.merge(KEYS.PLAIN, {name: 'first'});
+            Onyx.merge(KEYS.PLAIN, {name: 'second'});
+            const recorders = createRecorders<unknown>(HOOK_COUNT);
             render(
-                <SelectorProbe
+                <SelectorProbeList
                     onyxKey={KEYS.PLAIN}
                     selector={selectName}
-                    recorder={recorder}
+                    recorders={recorders}
                 />,
             );
-            await write(() => pendingMerge);
-            await write(() => Onyx.merge(KEYS.PLAIN, {count: 3}));
 
-            expect(statusesOf(recorder.commits)).toEqual([[undefined, 'loading']]);
+            for (const recorder of recorders) {
+                expect(statusesOf(recorder.commits)).toEqual([['zero', 'loaded']]);
+            }
+
+            await settle();
+
+            for (const recorder of recorders) {
+                expect(statusesOf(recorder.commits)).toEqual([
+                    ['zero', 'loaded'],
+                    ['second', 'loaded'],
+                ]);
+            }
         });
     });
 });

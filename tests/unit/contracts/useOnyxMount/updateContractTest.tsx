@@ -685,9 +685,10 @@ describe('useOnyx update contract', () => {
             expect(writer.renders.length).toBeLessThanOrEqual(5);
         });
     });
-    describe('current behaviour (suspected bug)', () => {
-        it('leaves hooks on members of a longer-prefix collection stale when Onyx.update batches two of them', async () => {
-            const [draftMember, draftRoot, reportRoot] = renderProbes([`${KEYS.REPORT_DRAFT}1`, KEYS.REPORT_DRAFT, KEYS.REPORT]);
+
+    describe('collections whose key starts with another collection key', () => {
+        it('delivers an Onyx.update batch of longer-prefix members to member hooks and keeps them out of the shorter collection', async () => {
+            const [draftMember, reportRoot] = renderProbes([`${KEYS.REPORT_DRAFT}1`, KEYS.REPORT]);
             await settle();
 
             await actAndSettle(() =>
@@ -697,19 +698,38 @@ describe('useOnyx update contract', () => {
                 ]),
             );
 
-            expect(lastCommit(draftMember).value).toBeUndefined();
-            expect(lastCommit(draftRoot).value).toBeUndefined();
-            expect(lastCommit(reportRoot).value).not.toHaveProperty(`${KEYS.REPORT_DRAFT}1`);
+            expect(draftMember.commits.map((frame) => [frame.value, frame.status])).toEqual([
+                [undefined, 'loaded'],
+                [{draft: 1}, 'loaded'],
+            ]);
+            expect(reportRoot.commits.map((frame) => [frame.value, frame.status])).toEqual([[{}, 'loaded']]);
+        });
+    });
+
+    describe('current behaviour (suspected bug)', () => {
+        // Onyx.update batches the members under the shorter 'report_' collection, so only the 'report_' root is notified.
+        it('leaves a root hook of a longer-prefix collection stale when Onyx.update batches two of its members', async () => {
+            const [draftRoot] = renderProbes([KEYS.REPORT_DRAFT]);
+            await settle();
+
+            await actAndSettle(() =>
+                Onyx.update([
+                    {onyxMethod: Onyx.METHOD.MERGE, key: `${KEYS.REPORT_DRAFT}1`, value: {draft: 1}},
+                    {onyxMethod: Onyx.METHOD.MERGE, key: `${KEYS.REPORT_DRAFT}2`, value: {draft: 2}},
+                ]),
+            );
+
+            expect(draftRoot.commits.map((frame) => [frame.value, frame.status])).toEqual([[{}, 'loaded']]);
 
             const remounted = createRecorder();
             render(
                 <OnyxProbe
-                    onyxKey={`${KEYS.REPORT_DRAFT}1`}
+                    onyxKey={KEYS.REPORT_DRAFT}
                     recorder={remounted}
                 />,
             );
             await settle();
-            expect(lastCommit(remounted).value).toEqual({draft: 1});
+            expect(lastCommit(remounted).value).toEqual({[`${KEYS.REPORT_DRAFT}1`]: {draft: 1}, [`${KEYS.REPORT_DRAFT}2`]: {draft: 2}});
         });
     });
 });

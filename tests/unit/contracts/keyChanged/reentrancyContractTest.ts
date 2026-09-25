@@ -25,7 +25,7 @@ describe('subscribers added during a notification', () => {
         expect(valuesFor(log, 'late')).toEqual([expected]);
     });
 
-    it('delivers a keysChanged batch exactly once to a member subscriber connected from a root callback in that batch', async () => {
+    it('delivers a collection batch exactly once to a member subscriber connected from a root callback in that batch', async () => {
         const {Onyx, log, connect, settle} = await startHarness();
         let armed = false;
         connect('root', REPORT, () => {
@@ -47,8 +47,8 @@ describe('subscribers added during a notification', () => {
 
 describe('subscribers removed during a notification', () => {
     it.each([
-        ['keyChanged on a plain key', KEYS.PLAIN],
-        ['keyChanged on a member', R1],
+        ['notifyKey on a plain key', KEYS.PLAIN],
+        ['notifyKey on a member', R1],
     ])('lets the remaining subscribers receive the value when one disconnects itself during %s', async (_label, key) => {
         const {Onyx, OnyxUtils, log, connect, settle} = await startHarness();
         const leaving = {connection: connect('leaving', key, () => Onyx.disconnect(leaving.connection))};
@@ -56,21 +56,27 @@ describe('subscribers removed during a notification', () => {
         await settle();
         const leavingCallsBefore = countFor(log, 'leaving');
 
-        OnyxUtils.keyChanged(key, 'first');
-        OnyxUtils.keyChanged(key, 'second');
+        OnyxUtils.notifyKey(key, 'first');
+        OnyxUtils.notifyKey(key, 'second');
 
         expect(countFor(log, 'leaving')).toBe(leavingCallsBefore);
         expect(valuesFor(log, 'after')).toEqual(['first', 'second']);
     });
 
-    it('does not deliver the current value to a later subscriber that an earlier one disconnected during keysChanged', async () => {
-        const {Onyx, OnyxUtils, cache, log, connect, settle} = await startHarness({storedValues: {[R1]: {id: 1}}});
-        const later = {connection: connect('placeholder', KEYS.PLAIN)};
-        connect('root', REPORT, () => Onyx.disconnect(later.connection));
-        later.connection = connect('R1', R1);
+    it('does not deliver a collection batch to a later member subscriber that an earlier root callback disconnected', async () => {
+        const {Onyx, log, connect, settle} = await startHarness({storedValues: {[R1]: {id: 1}}});
+        let armed = false;
+        const later = connect('R1', R1);
+        connect('root', REPORT, () => {
+            if (!armed) {
+                return;
+            }
+            Onyx.disconnect(later);
+        });
         await settle();
+        armed = true;
 
-        OnyxUtils.keysChanged(REPORT, {[R1]: cache.get(R1)}, {[R1]: {id: 0}});
+        await Onyx.mergeCollection(REPORT, {[R1]: {id: 2}});
 
         expect(namesOf(log)).toEqual(['root']);
     });

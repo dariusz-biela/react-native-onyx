@@ -1,6 +1,6 @@
 import lodashCloneDeep from 'lodash/cloneDeep';
 
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib/Onyx';
 import type {OnyxKey, OnyxUpdate} from '../../../../lib/types';
 import type GenericCollection from '../../../utils/GenericCollection';
 
@@ -39,7 +39,6 @@ const policyKey = (id: string) => `${ONYX_KEYS.COLLECTION.POLICY}${id}`;
 type Delivery = {value: unknown; key: OnyxKey | undefined};
 
 type SubscribeOptions = {
-    reuseConnection?: boolean;
     onDelivery?: (value: unknown, key: OnyxKey | undefined) => void;
 };
 
@@ -50,7 +49,6 @@ function subscribe(key: OnyxKey, options: SubscribeOptions = {}): Delivery[] {
     connections.push(
         Onyx.connect({
             key,
-            reuseConnection: options.reuseConnection,
             callback: (value: unknown, matchedKey: OnyxKey | undefined) => {
                 deliveries.push({value, key: matchedKey});
                 options.onDelivery?.(value, matchedKey);
@@ -70,7 +68,7 @@ async function subscribeSettled(key: OnyxKey, options: SubscribeOptions = {}): P
 
 /** Reads what a brand new subscriber would receive right now. */
 async function readThroughNewSubscriber(key: OnyxKey): Promise<unknown> {
-    const deliveries = subscribe(key, {reuseConnection: false});
+    const deliveries = subscribe(key);
     await waitForPromisesToResolve();
     return deliveries.at(-1)?.value;
 }
@@ -120,6 +118,23 @@ async function expectStorageToMatchCache(keys: OnyxKey[]): Promise<void> {
         const cached = OnyxCache.get(key);
         expect(await readStorage(key)).toEqual(cached === undefined ? null : cached);
     }
+}
+
+/** Records rejections carrying `error` from promises chained while the spy is active, marking them handled. */
+function captureRejectionsOf(error: Error): unknown[] {
+    const rejections: unknown[] = [];
+    const originalThen = Promise.prototype.then;
+    jest.spyOn(Promise.prototype, 'then').mockImplementation(function thenAndRecord(this: Promise<unknown>, onFulfilled, onRejected) {
+        const derived = originalThen.call(this, onFulfilled, onRejected);
+        originalThen.call(derived, undefined, (reason: unknown) => {
+            if (reason !== error) {
+                return;
+            }
+            rejections.push(reason);
+        });
+        return derived;
+    });
+    return rejections;
 }
 
 beforeEach(async () => {
@@ -652,8 +667,8 @@ describe('Onyx.mergeCollection contract', () => {
 
         it('deliver the same collection object to every independent subscription in one dispatch', async () => {
             await mergeReports({[reportKey('1')]: {a: 1}});
-            const first = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT, {reuseConnection: false});
-            const second = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT, {reuseConnection: false});
+            const first = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT);
+            const second = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT);
             const shared = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT);
 
             await mergeReports({[reportKey('1')]: {a: 2}, [reportKey('2')]: {b: 2}});
@@ -786,27 +801,22 @@ describe('Onyx.mergeCollection contract', () => {
         });
 
         it('keep receiving values when an earlier subscriber throws', async () => {
-            const collectionThrowing = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT, {
-                reuseConnection: false,
-                onDelivery: () => {
-                    throw new Error('collection subscriber failure');
-                },
-            });
-            const healthyCollection = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT, {reuseConnection: false});
-            const throwing = await subscribeSettled(reportKey('1'), {
-                reuseConnection: false,
-                onDelivery: () => {
-                    throw new Error('subscriber failure');
-                },
-            });
-            const healthySameKey = await subscribeSettled(reportKey('1'), {reuseConnection: false});
-            const healthy = await subscribeSettled(reportKey('2'), {reuseConnection: false});
-            const sharedThrowing = await subscribeSettled(reportKey('3'), {
-                onDelivery: () => {
-                    throw new Error('shared subscriber failure');
-                },
-            });
+            // Armed after settling: a throw on the initial fire is pinned separately as an #834 change.
+            let armed = false;
+            const throwWhenArmed = (message: string) => () => {
+                if (!armed) {
+                    return;
+                }
+                throw new Error(message);
+            };
+            const collectionThrowing = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT, {onDelivery: throwWhenArmed('collection subscriber failure')});
+            const healthyCollection = await subscribeSettled(ONYX_KEYS.COLLECTION.REPORT);
+            const throwing = await subscribeSettled(reportKey('1'), {onDelivery: throwWhenArmed('subscriber failure')});
+            const healthySameKey = await subscribeSettled(reportKey('1'));
+            const healthy = await subscribeSettled(reportKey('2'));
+            const sharedThrowing = await subscribeSettled(reportKey('3'), {onDelivery: throwWhenArmed('shared subscriber failure')});
             const sharedHealthy = await subscribeSettled(reportKey('3'));
+            armed = true;
 
             await mergeReports({[reportKey('1')]: {a: 1}, [reportKey('2')]: {b: 1}, [reportKey('3')]: {c: 1}});
 
@@ -1121,6 +1131,46 @@ describe('Onyx.mergeCollection contract', () => {
 
             expect(OnyxCache.get(reportKey('1'))).toEqual({replaced: true, x: 2});
             await expectStorageToMatchCache([reportKey('1')]);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main caught a throw on the initial fire and logged a '[ConnectionManager]' alert.
+        it('lets a throw on the initial fire escape as a rejected promise without logging it', async () => {
+            await mergeReports({[reportKey('1')]: {a: 1}});
+            const alerts: string[] = [];
+            Onyx.registerLogger(({message, level}) => {
+                if (level !== 'alert') {
+                    return;
+                }
+                alerts.push(message);
+            });
+            const failure = new Error('initial fire failure');
+            const rejections = captureRejectionsOf(failure);
+            let calls = 0;
+
+            const throwing = subscribe(reportKey('1'), {
+                onDelivery: () => {
+                    calls += 1;
+                    if (calls > 1) {
+                        return;
+                    }
+                    throw failure;
+                },
+            });
+            const healthy = subscribe(reportKey('1'));
+            await waitForPromisesToResolve();
+            jest.mocked(Promise.prototype.then).mockRestore();
+
+            expect(rejections).toEqual([failure]);
+            expect(alerts).toEqual([]);
+            expect(values(throwing)).toEqual([{a: 1}]);
+            expect(values(healthy)).toEqual([{a: 1}]);
+
+            await mergeReports({[reportKey('1')]: {a: 2}});
+
+            expect(values(throwing)).toEqual([{a: 1}, {a: 2}]);
+            expect(values(healthy)).toEqual([{a: 1}, {a: 2}]);
         });
     });
 });

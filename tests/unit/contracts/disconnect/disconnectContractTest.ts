@@ -1,9 +1,8 @@
 import Onyx from '../../../../lib';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
-import connectionManager from '../../../../lib/OnyxConnectionManager';
 import OnyxCache from '../../../../lib/OnyxCache';
+import onyxSubscriptionManager from '../../../../lib/OnyxSubscriptionManager';
 import {mockStore} from '../../../../lib/storage/providers/MemoryOnlyProvider';
-import type {OnyxKey} from '../../../../lib/types';
+import type {Connection, OnyxKey} from '../../../../lib/types';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const KEYS = {
@@ -33,26 +32,24 @@ function valuesOf(spy: Spy): unknown[] {
     return spy.mock.calls.map(([value]) => value);
 }
 
-function connect(key: OnyxKey, callback: Spy, reuseConnection?: boolean): Connection {
-    return Onyx.connect({key, callback, reuseConnection});
+function connect(key: OnyxKey, callback: Spy): Connection {
+    return Onyx.connect({key, callback});
 }
 
 beforeEach(async () => {
-    connectionManager.disconnectAll();
+    onyxSubscriptionManager.clearAll();
     await Onyx.clear();
     await waitForPromisesToResolve();
 });
 
 describe('Onyx.disconnect contracts', () => {
-    describe.each([
-        ['a reused connection', undefined],
-        ['a non-reused connection', false],
-    ])('no delivery after disconnect on %s', (_label, reuseConnection) => {
+    // main ran this block for a reused and a non-reused connection; #834 has only independent connections.
+    describe('no delivery after disconnect', () => {
         it('never calls the callback when disconnected in the same tick as connect, even for a key with a stored value', async () => {
             await Onyx.set(KEYS.PLAIN, 'stored');
             const spy = createSpy();
 
-            const connection = connect(KEYS.PLAIN, spy, reuseConnection);
+            const connection = connect(KEYS.PLAIN, spy);
             Onyx.disconnect(connection);
             await waitForPromisesToResolve();
             await Onyx.set(KEYS.PLAIN, 'changed');
@@ -66,7 +63,7 @@ describe('Onyx.disconnect contracts', () => {
             await Onyx.set(ITEM_1, {id: 1});
             const spy = createSpy();
 
-            const connection = connect(KEYS.COLLECTION.ITEMS, spy, reuseConnection);
+            const connection = connect(KEYS.COLLECTION.ITEMS, spy);
             Onyx.disconnect(connection);
             await waitForPromisesToResolve();
             await Onyx.set(ITEM_2, {id: 2});
@@ -77,7 +74,7 @@ describe('Onyx.disconnect contracts', () => {
 
         it('stops every kind of write from reaching the callback once disconnected', async () => {
             const spy = createSpy();
-            const connection = connect(KEYS.PLAIN, spy, reuseConnection);
+            const connection = connect(KEYS.PLAIN, spy);
             await waitForPromisesToResolve();
             await Onyx.set(KEYS.PLAIN, {a: 1});
             expect(valuesOf(spy)).toEqual([undefined, {a: 1}]);
@@ -99,7 +96,7 @@ describe('Onyx.disconnect contracts', () => {
 
         it('does not deliver a merge that was scheduled in the same tick as the disconnect, while the write itself still lands', async () => {
             const spy = createSpy();
-            const connection = connect(KEYS.PLAIN, spy, reuseConnection);
+            const connection = connect(KEYS.PLAIN, spy);
             await waitForPromisesToResolve();
             spy.mockClear();
 
@@ -117,8 +114,8 @@ describe('Onyx.disconnect contracts', () => {
         it('stops collection-level writes from reaching a disconnected collection root while a member subscriber keeps receiving them', async () => {
             const collectionSpy = createSpy();
             const memberSpy = createSpy();
-            const collectionConnection = connect(KEYS.COLLECTION.ITEMS, collectionSpy, reuseConnection);
-            connect(ITEM_1, memberSpy, reuseConnection);
+            const collectionConnection = connect(KEYS.COLLECTION.ITEMS, collectionSpy);
+            connect(ITEM_1, memberSpy);
             await waitForPromisesToResolve();
 
             Onyx.disconnect(collectionConnection);
@@ -138,8 +135,8 @@ describe('Onyx.disconnect contracts', () => {
         it('stops a disconnected member subscriber while the collection root keeps receiving the final collection', async () => {
             const collectionSpy = createSpy();
             const memberSpy = createSpy();
-            connect(KEYS.COLLECTION.ITEMS, collectionSpy, reuseConnection);
-            const memberConnection = connect(ITEM_1, memberSpy, reuseConnection);
+            connect(KEYS.COLLECTION.ITEMS, collectionSpy);
+            const memberConnection = connect(ITEM_1, memberSpy);
             await waitForPromisesToResolve();
 
             Onyx.disconnect(memberConnection);
@@ -307,24 +304,22 @@ describe('Onyx.disconnect contracts', () => {
             Onyx.disconnect(oldConnection);
 
             const newSpy = createSpy();
-            const newConnection = connect(KEYS.PLAIN, newSpy);
+            connect(KEYS.PLAIN, newSpy);
             await waitForPromisesToResolve();
             Onyx.disconnect(oldConnection);
             await Onyx.set(KEYS.PLAIN, 'fresh');
 
-            expect(newConnection.id).toBe(oldConnection.id);
             expect(valuesOf(oldSpy)).toEqual([undefined]);
             expect(valuesOf(newSpy)).toEqual([undefined, 'fresh']);
         });
 
         it('disconnecting an undefined or unknown handle neither throws nor affects live subscribers', async () => {
             const spy = createSpy();
-            const connection = connect(KEYS.PLAIN, spy);
+            connect(KEYS.PLAIN, spy);
             await waitForPromisesToResolve();
 
             expect(() => Onyx.disconnect(undefined as unknown as Connection)).not.toThrow();
-            expect(() => Onyx.disconnect({id: 'unknown', callbackID: '0'})).not.toThrow();
-            expect(() => Onyx.disconnect({id: connection.id, callbackID: 'not-a-callback'})).not.toThrow();
+            expect(() => Onyx.disconnect({unsubscribe: () => undefined})).not.toThrow();
             await Onyx.set(KEYS.PLAIN, 'still');
 
             expect(valuesOf(spy)).toEqual([undefined, 'still']);
@@ -335,8 +330,8 @@ describe('Onyx.disconnect contracts', () => {
             const uniqueA = createSpy();
             const uniqueB = createSpy();
             connect(KEYS.PLAIN, shared);
-            const uniqueAConnection = connect(KEYS.PLAIN, uniqueA, false);
-            connect(KEYS.PLAIN, uniqueB, false);
+            const uniqueAConnection = connect(KEYS.PLAIN, uniqueA);
+            connect(KEYS.PLAIN, uniqueB);
             await waitForPromisesToResolve();
 
             Onyx.disconnect(uniqueAConnection);
@@ -365,10 +360,7 @@ describe('Onyx.disconnect contracts', () => {
     });
 
     describe('disconnect during a notification', () => {
-        it.each([
-            ['separate subscriptions', false],
-            ['a shared connection', undefined],
-        ])('a subscriber that disconnects itself does not stop the rest from receiving the same value (%s)', async (_label, reuseConnection) => {
+        it('a subscriber that disconnects itself does not stop the rest from receiving the same value', async () => {
             const connections: Connection[] = [];
             const selfDisconnecting = createSpy((value) => {
                 if (value !== 'trigger') {
@@ -378,9 +370,9 @@ describe('Onyx.disconnect contracts', () => {
             });
             const second = createSpy();
             const third = createSpy();
-            connections.push(connect(KEYS.PLAIN, selfDisconnecting, reuseConnection));
-            connections.push(connect(KEYS.PLAIN, second, reuseConnection));
-            connections.push(connect(KEYS.PLAIN, third, reuseConnection));
+            connections.push(connect(KEYS.PLAIN, selfDisconnecting));
+            connections.push(connect(KEYS.PLAIN, second));
+            connections.push(connect(KEYS.PLAIN, third));
             await waitForPromisesToResolve();
 
             await Onyx.set(KEYS.PLAIN, 'trigger');
@@ -389,60 +381,6 @@ describe('Onyx.disconnect contracts', () => {
             expect(valuesOf(selfDisconnecting)).toEqual([undefined, 'trigger']);
             expect(valuesOf(second)).toEqual([undefined, 'trigger', 'after']);
             expect(valuesOf(third)).toEqual([undefined, 'trigger', 'after']);
-        });
-
-        it.each([
-            ['separate subscriptions', false],
-            ['a shared connection', undefined],
-        ])('a subscriber that disconnects a later sibling prevents the sibling from receiving the value being dispatched (%s)', async (_label, reuseConnection) => {
-            let siblingConnection: Connection | undefined;
-            const disconnector = createSpy((value) => {
-                if (value !== 'trigger' || !siblingConnection) {
-                    return;
-                }
-                Onyx.disconnect(siblingConnection);
-            });
-            const sibling = createSpy();
-            const bystander = createSpy();
-            connect(KEYS.PLAIN, disconnector, reuseConnection);
-            siblingConnection = connect(KEYS.PLAIN, sibling, reuseConnection);
-            connect(KEYS.PLAIN, bystander, reuseConnection);
-            await waitForPromisesToResolve();
-
-            await Onyx.set(KEYS.PLAIN, 'trigger');
-            await Onyx.set(KEYS.PLAIN, 'after');
-
-            expect(valuesOf(sibling)).toEqual([undefined]);
-            expect(valuesOf(bystander)).toEqual([undefined, 'trigger', 'after']);
-            expect(valuesOf(disconnector)).toEqual([undefined, 'trigger', 'after']);
-        });
-
-        it('a subscriber that disconnects a later sibling and reconnects to the same key in the callback gives the new subscriber exactly one delivery of the value', async () => {
-            let siblingConnection: Connection | undefined;
-            const fresh = createSpy();
-            let freshConnection: Connection | undefined;
-            const reconnector = createSpy((value) => {
-                if (value !== 'trigger' || !siblingConnection) {
-                    return;
-                }
-                Onyx.disconnect(siblingConnection);
-                freshConnection = connect(KEYS.PLAIN, fresh);
-            });
-            const sibling = createSpy();
-            connect(KEYS.PLAIN, reconnector, false);
-            siblingConnection = connect(KEYS.PLAIN, sibling);
-            await waitForPromisesToResolve();
-
-            await Onyx.set(KEYS.PLAIN, 'trigger');
-            await waitForPromisesToResolve();
-            await Onyx.set(KEYS.PLAIN, 'after');
-
-            expect(freshConnection?.id).toBe(siblingConnection.id);
-            expect(valuesOf(sibling)).toEqual([undefined]);
-            expect(fresh.mock.calls).toEqual([
-                ['trigger', KEYS.PLAIN],
-                ['after', KEYS.PLAIN],
-            ]);
         });
 
         it('a subscriber that disconnects an earlier sibling does not replay the value to anyone', async () => {
@@ -454,8 +392,8 @@ describe('Onyx.disconnect contracts', () => {
                 }
                 Onyx.disconnect(earlierConnection);
             });
-            earlierConnection = connect(KEYS.PLAIN, earlier, false);
-            connect(KEYS.PLAIN, disconnector, false);
+            earlierConnection = connect(KEYS.PLAIN, earlier);
+            connect(KEYS.PLAIN, disconnector);
             await waitForPromisesToResolve();
 
             await Onyx.set(KEYS.PLAIN, 'trigger');
@@ -470,18 +408,20 @@ describe('Onyx.disconnect contracts', () => {
             ['a single member set', () => Onyx.set(ITEM_1, {v: 1})],
         ])('a collection root that disconnects itself during %s does not stop the other collection roots', async (_label, write) => {
             const connections: Connection[] = [];
-            const selfDisconnecting = createSpy((value) => {
-                if (!value) {
+            let isArmed = false;
+            const selfDisconnecting = createSpy(() => {
+                if (!isArmed) {
                     return;
                 }
                 Onyx.disconnect(connections[0]);
             });
             const second = createSpy();
             const third = createSpy();
-            connections.push(connect(KEYS.COLLECTION.ITEMS, selfDisconnecting, false));
-            connections.push(connect(KEYS.COLLECTION.ITEMS, second, false));
-            connections.push(connect(KEYS.COLLECTION.ITEMS, third, false));
+            connections.push(connect(KEYS.COLLECTION.ITEMS, selfDisconnecting));
+            connections.push(connect(KEYS.COLLECTION.ITEMS, second));
+            connections.push(connect(KEYS.COLLECTION.ITEMS, third));
             await waitForPromisesToResolve();
+            isArmed = true;
             second.mockClear();
             third.mockClear();
 
@@ -514,45 +454,19 @@ describe('Onyx.disconnect contracts', () => {
             expect(valuesOf(member)).toEqual([undefined]);
             expect(valuesOf(otherMember)).toEqual([undefined, {v: 2}]);
         });
-
-        it('a subscriber that disconnects itself and writes during the notification never sees its own write, and the shared sibling ends on the final value', async () => {
-            const connections: Connection[] = [];
-            const writer = createSpy((value) => {
-                if (value !== 'first') {
-                    return;
-                }
-                Onyx.disconnect(connections[0]);
-                Onyx.set(KEYS.PLAIN, 'second');
-            });
-            const sibling = createSpy();
-            connections.push(connect(KEYS.PLAIN, writer));
-            connections.push(connect(KEYS.PLAIN, sibling));
-            await waitForPromisesToResolve();
-
-            await Onyx.set(KEYS.PLAIN, 'first');
-            await waitForPromisesToResolve();
-
-            expect(valuesOf(writer)).toEqual([undefined, 'first']);
-            expect(OnyxCache.get(KEYS.PLAIN)).toBe('second');
-            expect(sibling.mock.lastCall).toEqual(['second', KEYS.PLAIN]);
-            expect(sibling.mock.calls.length).toBeLessThanOrEqual(3);
-        });
     });
 
     describe('disconnect then reconnect', () => {
-        it.each([
-            ['a reused connection', undefined],
-            ['a non-reused connection', false],
-        ])('delivers the value written while disconnected instead of the stale one, then keeps receiving updates (%s)', async (_label, reuseConnection) => {
+        it('delivers the value written while disconnected instead of the stale one, then keeps receiving updates', async () => {
             await Onyx.set(KEYS.PLAIN, 'old');
             const oldSpy = createSpy();
-            const oldConnection = connect(KEYS.PLAIN, oldSpy, reuseConnection);
+            const oldConnection = connect(KEYS.PLAIN, oldSpy);
             await waitForPromisesToResolve();
             Onyx.disconnect(oldConnection);
 
             await Onyx.set(KEYS.PLAIN, 'fresh');
             const newSpy = createSpy();
-            connect(KEYS.PLAIN, newSpy, reuseConnection);
+            connect(KEYS.PLAIN, newSpy);
             await waitForPromisesToResolve();
             await Onyx.set(KEYS.PLAIN, 'later');
 
@@ -605,10 +519,10 @@ describe('Onyx.disconnect contracts', () => {
             const churned = createSpy();
             const keys = [KEYS.PLAIN, KEYS.OTHER, KEYS.COLLECTION.ITEMS, ITEM_1];
             for (let index = 0; index < 40; index++) {
-                Onyx.disconnect(connect(keys[index % keys.length], churned, false));
+                Onyx.disconnect(connect(keys[index % keys.length], churned));
             }
             const survivor = createSpy();
-            connect(KEYS.OTHER, survivor, false);
+            connect(KEYS.OTHER, survivor);
             await waitForPromisesToResolve();
             await Onyx.multiSet({[KEYS.PLAIN]: 'p2', [KEYS.OTHER]: 'o2', [ITEM_1]: {v: 2}});
 
@@ -641,8 +555,8 @@ describe('Onyx.disconnect contracts', () => {
             const disconnected = createSpy();
             const live = createSpy();
 
-            Onyx.disconnect(connect(KEYS.PLAIN, disconnected, false));
-            connect(KEYS.OTHER, live, false);
+            Onyx.disconnect(connect(KEYS.PLAIN, disconnected));
+            connect(KEYS.OTHER, live);
             await waitForPromisesToResolve();
 
             expect(disconnected).not.toHaveBeenCalled();
@@ -650,8 +564,9 @@ describe('Onyx.disconnect contracts', () => {
         });
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        it('a late subscriber of an established shared connection still receives the cached value when disconnected in the same tick as connect', async () => {
+    describe('fixed by #834 (was a suspected bug)', () => {
+        // main still called the late subscriber once with 'cached'.
+        it('never calls a late subscriber that disconnects in the same tick as connect while another subscriber is live', async () => {
             await Onyx.set(KEYS.PLAIN, 'cached');
             const first = createSpy();
             connect(KEYS.PLAIN, first);
@@ -662,11 +577,14 @@ describe('Onyx.disconnect contracts', () => {
             await waitForPromisesToResolve();
             await Onyx.set(KEYS.PLAIN, 'after');
 
-            expect(late.mock.calls).toEqual([['cached', KEYS.PLAIN]]);
+            expect(late).not.toHaveBeenCalled();
             expect(valuesOf(first)).toEqual(['cached', 'after']);
         });
+    });
 
-        it('a separate subscription dispatched after a subscriber that disconnects itself and writes ends on the stale dispatched value instead of the final one', async () => {
+    describe('current behaviour (suspected bug)', () => {
+        // main ended only a reuseConnection: false sibling on 'first'; a default shared sibling ended on 'second'.
+        it('a later subscription dispatched after a subscriber that disconnects itself and writes ends on the stale dispatched value instead of the final one', async () => {
             const connections: Connection[] = [];
             const writer = createSpy((value) => {
                 if (value !== 'first') {
@@ -676,8 +594,8 @@ describe('Onyx.disconnect contracts', () => {
                 Onyx.set(KEYS.PLAIN, 'second');
             });
             const sibling = createSpy();
-            connections.push(connect(KEYS.PLAIN, writer, false));
-            connections.push(connect(KEYS.PLAIN, sibling, false));
+            connections.push(connect(KEYS.PLAIN, writer));
+            connections.push(connect(KEYS.PLAIN, sibling));
             await waitForPromisesToResolve();
 
             await Onyx.set(KEYS.PLAIN, 'first');
@@ -686,6 +604,59 @@ describe('Onyx.disconnect contracts', () => {
             expect(valuesOf(writer)).toEqual([undefined, 'first']);
             expect(OnyxCache.get(KEYS.PLAIN)).toBe('second');
             expect(valuesOf(sibling)).toEqual([undefined, 'second', 'first']);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main never called the sibling with 'trigger': a disconnect took effect inside the running dispatch.
+        it('a subscriber that disconnects a later sibling does not stop the sibling from receiving the value being dispatched, only later ones', async () => {
+            let siblingConnection: Connection | undefined;
+            const disconnector = createSpy((value) => {
+                if (value !== 'trigger' || !siblingConnection) {
+                    return;
+                }
+                Onyx.disconnect(siblingConnection);
+            });
+            const sibling = createSpy();
+            const bystander = createSpy();
+            connect(KEYS.PLAIN, disconnector);
+            siblingConnection = connect(KEYS.PLAIN, sibling);
+            connect(KEYS.PLAIN, bystander);
+            await waitForPromisesToResolve();
+
+            await Onyx.set(KEYS.PLAIN, 'trigger');
+            await Onyx.set(KEYS.PLAIN, 'after');
+
+            expect(valuesOf(sibling)).toEqual([undefined, 'trigger']);
+            expect(valuesOf(bystander)).toEqual([undefined, 'trigger', 'after']);
+            expect(valuesOf(disconnector)).toEqual([undefined, 'trigger', 'after']);
+        });
+
+        // main never called the sibling with 'trigger' either.
+        it('a subscriber that disconnects a later sibling and reconnects to the same key in the callback still delivers the value to the sibling and exactly once to the new subscriber', async () => {
+            let siblingConnection: Connection | undefined;
+            const fresh = createSpy();
+            const reconnector = createSpy((value) => {
+                if (value !== 'trigger' || !siblingConnection) {
+                    return;
+                }
+                Onyx.disconnect(siblingConnection);
+                connect(KEYS.PLAIN, fresh);
+            });
+            const sibling = createSpy();
+            connect(KEYS.PLAIN, reconnector);
+            siblingConnection = connect(KEYS.PLAIN, sibling);
+            await waitForPromisesToResolve();
+
+            await Onyx.set(KEYS.PLAIN, 'trigger');
+            await waitForPromisesToResolve();
+            await Onyx.set(KEYS.PLAIN, 'after');
+
+            expect(valuesOf(sibling)).toEqual([undefined, 'trigger']);
+            expect(fresh.mock.calls).toEqual([
+                ['trigger', KEYS.PLAIN],
+                ['after', KEYS.PLAIN],
+            ]);
         });
     });
 });

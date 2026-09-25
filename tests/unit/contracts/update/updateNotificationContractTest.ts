@@ -109,8 +109,8 @@ describe('Onyx.update grouping of collection members', () => {
 
         expect(first.calls).toEqual([{a: 2, b: 1}]);
         expect(second.calls).toEqual([{a: 3}]);
-        expect(untouched.calls).toEqual([]);
-        expect(otherCollection.calls).toEqual([]);
+        expect(untouched.calls).toStrictEqual([]);
+        expect(otherCollection.calls).toStrictEqual([]);
     });
 
     it('keeps the reference of untouched members stable in collection deliveries', async () => {
@@ -141,8 +141,8 @@ describe('Onyx.update grouping of collection members', () => {
             {onyxMethod: 'merge', key: member(2), value: {a: 1}},
         ]);
 
-        expect(first.calls).toEqual([]);
-        expect(second.calls).toEqual([]);
+        expect(first.calls).toStrictEqual([]);
+        expect(second.calls).toStrictEqual([]);
         expect(collection.calls.length).toBeLessThanOrEqual(1);
         for (const value of collection.calls) {
             expect(value).toEqual({[member(1)]: {a: 1}, [member(2)]: {a: 1}});
@@ -241,8 +241,8 @@ describe('Onyx.update notifications', () => {
             {onyxMethod: 'set', key: OTHER, value: {b: 1}},
         ]);
 
-        expect(test.calls).toEqual([]);
-        expect(other.calls).toEqual([]);
+        expect(test.calls).toStrictEqual([]);
+        expect(other.calls).toStrictEqual([]);
     });
 
     it('does not notify subscribers of keys the batch does not touch', async () => {
@@ -256,8 +256,8 @@ describe('Onyx.update notifications', () => {
             {onyxMethod: 'merge', key: member(2), value: {x: 2}},
         ]);
 
-        expect(other.calls).toEqual([]);
-        expect(bMember.calls).toEqual([]);
+        expect(other.calls).toStrictEqual([]);
+        expect(bMember.calls).toStrictEqual([]);
     });
 
     it('has delivered the final values to subscribers by the time the returned promise resolves', async () => {

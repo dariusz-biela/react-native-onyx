@@ -143,7 +143,38 @@ function applyUpdates(state: State, updates: Update[]): State {
     return updates.reduce(applyUpdate, state);
 }
 
-export {defaultState, applyUpdate, applyUpdates, mergeValue, withoutNestedNulls, getCollectionKey};
+/** Returns the keys an `Onyx.update` batch writes, the way it queues them. */
+function updatedKeys(updates: Update[]): Set<string> {
+    const keys = new Set<string>();
+    for (const {onyxMethod, key, value} of updates) {
+        if (onyxMethod === 'set' || onyxMethod === 'merge') {
+            keys.add(key);
+        } else if ((onyxMethod === 'multiset' || onyxMethod === 'mergecollection') && isPlainObject(value)) {
+            for (const memberKey of Object.keys(value)) {
+                keys.add(memberKey);
+            }
+        }
+    }
+    return keys;
+}
+
+/**
+ * Returns the cold keys (in storage, not cached) whose stored value an `Onyx.update` batch still reads since #834:
+ * members of a collection the batch writes in two or more members, which go through the pre-warming mergeCollection.
+ */
+function coldKeysReadByUpdate(cold: State, updates: Update[]): State {
+    const written = [...updatedKeys(updates)];
+    const read: State = {};
+    for (const [key, value] of Object.entries(cold)) {
+        const collectionKey = getCollectionKey(key);
+        if (collectionKey && written.includes(key) && written.filter((writtenKey) => getCollectionKey(writtenKey) === collectionKey).length >= 2) {
+            read[key] = value;
+        }
+    }
+    return read;
+}
+
+export {defaultState, applyUpdate, applyUpdates, mergeValue, withoutNestedNulls, getCollectionKey, coldKeysReadByUpdate};
 
 if (isRunningAsSuite(__filename)) {
     describe('update reference model', () => {
@@ -163,6 +194,17 @@ if (isRunningAsSuite(__filename)) {
         it('removes collection members missing from a setCollection', () => {
             const state = {colA_1: {a: 1}, colA_2: {a: 2}, colB_1: {b: 1}};
             expect(applyUpdates(state, [{onyxMethod: 'setcollection', key: 'colA_', value: {colA_2: {a: 3}}}])).toEqual({colA_2: {a: 3}, colB_1: {b: 1}});
+        });
+
+        it('reads a cold key only when the batch writes it next to another member of its collection', () => {
+            const cold = {test: {a: 1}, colA_1: {a: 1}, colA_2: {a: 2}, colB_1: {b: 1}};
+            const batch: Update[] = [
+                {onyxMethod: 'merge', key: 'test', value: {b: 1}},
+                {onyxMethod: 'merge', key: 'colA_1', value: {b: 1}},
+                {onyxMethod: 'multiset', key: '', value: {colA_3: {c: 1}}},
+                {onyxMethod: 'merge', key: 'colB_1', value: {c: 1}},
+            ];
+            expect(coldKeysReadByUpdate(cold, batch)).toEqual({colA_1: {a: 1}});
         });
 
         it('resolves the most specific collection of a prefix-colliding key', () => {

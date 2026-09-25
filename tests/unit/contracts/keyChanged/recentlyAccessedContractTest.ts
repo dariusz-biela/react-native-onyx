@@ -4,7 +4,7 @@ import {R1, R2, R3, REPORT, startHarness} from './utils/harness';
 
 const EVICTABLE = {evictableKeys: [REPORT]};
 
-describe('recently accessed keys maintained by keyChanged and keysChanged', () => {
+describe('recently accessed keys maintained by notifyKey and notifyCollection', () => {
     it('moves a member to the most recent end each time a write notifies it', async () => {
         const {Onyx, cache} = await startHarness(EVICTABLE);
 
@@ -40,27 +40,27 @@ describe('recently accessed keys maintained by keyChanged and keysChanged', () =
         expect(cache.getKeyForEviction()).toBeUndefined();
     });
 
-    it('tracks direct keyChanged and keysChanged calls the same way', async () => {
+    it('tracks direct notifyKey and notifyCollection calls the same way', async () => {
         const {OnyxUtils, cache} = await startHarness(EVICTABLE);
 
-        OnyxUtils.keyChanged(R1, {v: 1});
-        OnyxUtils.keysChanged(REPORT, {[R2]: {v: 2}, [R3]: {v: 3}}, {});
+        OnyxUtils.notifyKey(R1, {v: 1});
+        OnyxUtils.notifyCollection(REPORT, {[R2]: {v: 2}, [R3]: {v: 3}}, {});
         expect(cache.getKeyForEviction()).toBe(R1);
 
-        OnyxUtils.keyChanged(R1, {v: 11});
+        OnyxUtils.notifyKey(R1, {v: 11});
         expect(cache.getKeyForEviction()).toBe(R2);
 
-        OnyxUtils.keysChanged(REPORT, {[R2]: undefined, [R3]: null}, {});
-        OnyxUtils.keyChanged(R1, undefined);
+        OnyxUtils.notifyCollection(REPORT, {[R2]: undefined, [R3]: null}, {});
+        OnyxUtils.notifyKey(R1, undefined);
         expect(cache.getKeyForEviction()).toBeUndefined();
     });
 
     it('never lists a collection key or a key outside the evictable collections', async () => {
         const {OnyxUtils, cache} = await startHarness(EVICTABLE);
 
-        OnyxUtils.keyChanged(REPORT, {});
-        OnyxUtils.keyChanged<OnyxKey>(KEYS.PLAIN, 'value');
-        OnyxUtils.keyChanged(`${KEYS.COLLECTION.REPORT_ACTIONS}1`, {v: 1});
+        OnyxUtils.notifyKey(REPORT, {});
+        OnyxUtils.notifyKey<OnyxKey>(KEYS.PLAIN, 'value');
+        OnyxUtils.notifyKey(`${KEYS.COLLECTION.REPORT_ACTIONS}1`, {v: 1});
 
         expect(cache.getKeyForEviction()).toBeUndefined();
     });
@@ -68,9 +68,9 @@ describe('recently accessed keys maintained by keyChanged and keysChanged', () =
     it('tracks a member even when no subscriber listens to it', async () => {
         const {OnyxUtils, cache} = await startHarness(EVICTABLE);
 
-        OnyxUtils.keyChanged(R1, {v: 1});
-        OnyxUtils.keyChanged(R2, {v: 2});
-        OnyxUtils.keyChanged(R1, undefined);
+        OnyxUtils.notifyKey(R1, {v: 1});
+        OnyxUtils.notifyKey(R2, {v: 2});
+        OnyxUtils.notifyKey(R1, undefined);
 
         expect(cache.getKeyForEviction()).toBe(R2);
     });

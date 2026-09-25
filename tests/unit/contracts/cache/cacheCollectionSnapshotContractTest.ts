@@ -19,11 +19,6 @@ beforeEach(() => {
 
 describe('OnyxCache collection snapshot contract', () => {
     describe('before any key is known', () => {
-        it('returns undefined for a registered collection while the cache holds no keys', () => {
-            expect(cache.getCollectionData(COLLECTION.COLL)).toBeUndefined();
-            expect(cache.getCollectionData(COLLECTION.EMPTY)).toBeUndefined();
-        });
-
         it('returns undefined for a key that is not a registered collection', () => {
             cache.set(PLAIN.KEY, 1);
 
@@ -63,16 +58,6 @@ describe('OnyxCache collection snapshot contract', () => {
             expect(cache.getCollectionData(COLLECTION.COLL)).toBe(empty);
         });
 
-        it('returns undefined again once every key has been dropped from the cache', () => {
-            cache.set(MEMBER_1, {id: 1});
-            expect(readSnapshot(cache, COLLECTION.COLL)).toEqual({[MEMBER_1]: {id: 1}});
-
-            cache.drop(MEMBER_1);
-
-            expect(cache.getAllKeys().size).toBe(0);
-            expect(cache.getCollectionData(COLLECTION.COLL)).toBeUndefined();
-        });
-
         it('keeps the empty snapshot when a member is set to null without ever having a value', () => {
             cache.set(PLAIN.KEY, 1);
             const empty = cache.getCollectionData(COLLECTION.COLL);
@@ -81,6 +66,30 @@ describe('OnyxCache collection snapshot contract', () => {
             cache.merge({[MEMBER_2]: null});
 
             expect(cache.getCollectionData(COLLECTION.COLL)).toBe(empty);
+        });
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        it('returns the same frozen empty object for a registered collection while the cache holds no keys', () => {
+            const coll = cache.getCollectionData(COLLECTION.COLL);
+            const empty = cache.getCollectionData(COLLECTION.EMPTY);
+
+            // main returned undefined until the first key of any kind was cached.
+            expect(coll).toEqual({});
+            expect(Object.isFrozen(coll)).toBe(true);
+            expect(empty).toBe(coll);
+        });
+
+        it('returns the frozen empty object once every key has been dropped from the cache', () => {
+            cache.set(MEMBER_1, {id: 1});
+            expect(readSnapshot(cache, COLLECTION.COLL)).toEqual({[MEMBER_1]: {id: 1}});
+
+            cache.drop(MEMBER_1);
+
+            expect(cache.getAllKeys().size).toBe(0);
+            // main returned undefined again here.
+            expect(cache.getCollectionData(COLLECTION.COLL)).toBe(cache.getCollectionData(COLLECTION.EMPTY));
+            expect(cache.getCollectionData(COLLECTION.COLL)).toEqual({});
         });
     });
 

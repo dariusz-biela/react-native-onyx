@@ -4,7 +4,6 @@ import type {OnyxCollection} from '../../../../lib';
 import type GenericCollection from '../../../utils/GenericCollection';
 
 import Onyx, {useOnyx} from '../../../../lib';
-import onyxSnapshotCache from '../../../../lib/OnyxSnapshotCache';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
 const ONYX_KEYS = {
@@ -44,8 +43,6 @@ function renderRecordedHook<T>(useValue: () => T) {
 
 beforeEach(async () => {
     await Onyx.clear();
-    onyxSnapshotCache.clear();
-    onyxSnapshotCache.clearSelectorIds();
 });
 
 describe('Onyx.mergeCollection contract through useOnyx', () => {

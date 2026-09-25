@@ -278,18 +278,18 @@ describe('useOnyx with an inline selector that is a new function on every render
         expect(renders - rendersAfterMount).toBe(3);
     });
 
-    describe('current behaviour (suspected bug)', () => {
-        // A deep-equal nested output is compared only shallowly after a new memoized wrapper is built for the new function, so identity is lost.
-        it('returns a new value reference on every parent re-render when an inline selector returns a nested object', async () => {
-            await Onyx.set(KEYS.PLAIN, {meta: {level: 1}});
-            const {result, rerender} = renderHook(() => useOnyx(KEYS.PLAIN, {selector: (value) => ({meta: {level: readField(readField(value, 'meta'), 'level')}})}));
-            await settle();
-            const valueBefore = result.current[0];
+    it('keeps the value and result references across parent re-renders when an inline selector returns a nested object', async () => {
+        await Onyx.set(KEYS.PLAIN, {meta: {level: 1}});
+        const {result, rerender} = renderHook(() => useOnyx(KEYS.PLAIN, {selector: (value) => ({meta: {level: readField(readField(value, 'meta'), 'level')}})}));
+        await settle();
+        const resultBefore = result.current;
+        const valueBefore = result.current[0];
 
-            rerender(undefined);
+        rerender(undefined);
+        rerender(undefined);
 
-            expect(result.current[0]).toEqual(valueBefore);
-            expect(result.current[0]).not.toBe(valueBefore);
-        });
+        expect(result.current[0]).toBe(valueBefore);
+        expect(result.current).toBe(resultBefore);
+        expect(result.current[0]).toEqual({meta: {level: 1}});
     });
 });

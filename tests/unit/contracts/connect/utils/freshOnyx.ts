@@ -1,6 +1,6 @@
 import type OnyxDefault from '../../../../../lib';
 import type OnyxCache from '../../../../../lib/OnyxCache';
-import type OnyxConnectionManager from '../../../../../lib/OnyxConnectionManager';
+import type OnyxSubscriptionManager from '../../../../../lib/OnyxSubscriptionManager';
 import type OnyxUtilsDefault from '../../../../../lib/OnyxUtils';
 import type StorageMock from '../../../../../lib/storage';
 import type {InitOptions} from '../../../../../lib/types';
@@ -27,7 +27,7 @@ type OnyxModules = {
     Onyx: typeof OnyxDefault;
     cache: typeof OnyxCache;
     storage: typeof StorageMock;
-    connectionManager: typeof OnyxConnectionManager;
+    subscriptionManager: typeof OnyxSubscriptionManager;
     OnyxUtils: typeof OnyxUtilsDefault;
 };
 
@@ -43,7 +43,7 @@ function loadFreshOnyx(): OnyxModules {
         Onyx: require('../../../../../lib').default,
         cache: require('../../../../../lib/OnyxCache').default,
         storage: require('../../../../../lib/storage').default,
-        connectionManager: require('../../../../../lib/OnyxConnectionManager').default,
+        subscriptionManager: require('../../../../../lib/OnyxSubscriptionManager').default,
         OnyxUtils: require('../../../../../lib/OnyxUtils').default,
     };
 }

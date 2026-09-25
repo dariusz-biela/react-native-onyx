@@ -1,6 +1,7 @@
 import type * as ReactTestingLibrary from '@testing-library/react-native/pure';
 import type OnyxModule from '../../../../lib/Onyx';
 import type OnyxCacheModule from '../../../../lib/OnyxCache';
+import type OnyxSubscriptionManagerModule from '../../../../lib/OnyxSubscriptionManager';
 import type OnyxUtilsModule from '../../../../lib/OnyxUtils';
 import type StorageMockModule from '../../../../lib/storage/__mocks__';
 import type {InitOptions, OnyxKey, OnyxValue} from '../../../../lib/types';
@@ -68,6 +69,7 @@ type OnyxModules = {
     Onyx: typeof OnyxModule;
     OnyxUtils: typeof OnyxUtilsModule;
     cache: typeof OnyxCacheModule;
+    subscriptions: typeof OnyxSubscriptionManagerModule;
     StorageMock: typeof StorageMockModule;
     useOnyx: typeof useOnyxModule;
     rtl: typeof ReactTestingLibrary;
@@ -95,6 +97,7 @@ async function loadOnyx({storageSeed, initOptions}: LoadOptions = {}): Promise<O
     const Onyx: typeof OnyxModule = require('../../../../lib').default;
     const OnyxUtils: typeof OnyxUtilsModule = require('../../../../lib/OnyxUtils').default;
     const cache: typeof OnyxCacheModule = require('../../../../lib/OnyxCache').default;
+    const subscriptions: typeof OnyxSubscriptionManagerModule = require('../../../../lib/OnyxSubscriptionManager').default;
     const useOnyx: typeof useOnyxModule = require('../../../../lib').useOnyx;
     // The pure entry point does not register global cleanup hooks, which cannot be added from inside a test.
     const rtl: typeof ReactTestingLibrary = require('@testing-library/react-native/pure');
@@ -113,7 +116,7 @@ async function loadOnyx({storageSeed, initOptions}: LoadOptions = {}): Promise<O
     });
     await waitForPromisesToResolve();
 
-    return {Onyx, OnyxUtils, cache, StorageMock, useOnyx, rtl, initialKeyStates};
+    return {Onyx, OnyxUtils, cache, subscriptions, StorageMock, useOnyx, rtl, initialKeyStates};
 }
 
 /** Unmounts everything rendered by the most recently loaded React Testing Library instance. */

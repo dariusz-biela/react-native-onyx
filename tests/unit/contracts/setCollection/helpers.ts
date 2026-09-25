@@ -1,10 +1,10 @@
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib';
 import type MockedStorage from '../../../../lib/storage/__mocks__';
 import type {OnyxKey} from '../../../../lib/types';
 
 import Onyx from '../../../../lib';
 import OnyxCache from '../../../../lib/OnyxCache';
-import OnyxUtils from '../../../../lib/OnyxUtils';
+import onyxSubscriptionManager from '../../../../lib/OnyxSubscriptionManager';
 import Storage from '../../../../lib/storage';
 import waitForPromisesToResolve from '../../../utils/waitForPromisesToResolve';
 
@@ -135,9 +135,9 @@ function isMemberOf(collectionKey: string, key: string): boolean {
     return key.startsWith(collectionKey) && key.length > collectionKey.length;
 }
 
-/** Reads the collection the way `useOnyx` does on first render. */
+/** Reads the collection the way `useOnyx` and `Onyx.connect` do, from the subscription store. */
 function readCollection(collectionKey: string): unknown {
-    return OnyxUtils.tryGetCachedValue(collectionKey);
+    return onyxSubscriptionManager.getState(collectionKey);
 }
 
 /** Returns every key the cache would evict, least recently used first. */

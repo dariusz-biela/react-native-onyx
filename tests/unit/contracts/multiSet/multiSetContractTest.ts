@@ -1,5 +1,5 @@
 import Onyx from '../../../../lib';
-import type {Connection} from '../../../../lib/OnyxConnectionManager';
+import type {Connection} from '../../../../lib';
 import OnyxCache from '../../../../lib/OnyxCache';
 import DevTools from '../../../../lib/DevTools';
 import StorageMock from '../../../../lib/storage';
@@ -602,7 +602,6 @@ describe('Onyx.multiSet contract', () => {
             connections.push(
                 Onyx.connect({
                     key: KEYS.PLAIN_A,
-                    reuseConnection: false,
                     callback: (value: unknown) => {
                         if (value !== 'boom') {
                             return;
@@ -614,7 +613,6 @@ describe('Onyx.multiSet contract', () => {
             connections.push(
                 Onyx.connect({
                     key: KEYS.COLLECTION.TEST,
-                    reuseConnection: false,
                     callback: (value: unknown) => {
                         if (!value || Object.keys(value).length === 0) {
                             return;
@@ -637,11 +635,11 @@ describe('Onyx.multiSet contract', () => {
             expect(storedValue(KEYS.PLAIN_B)).toBe('b');
         });
 
-        it('delivers the batch to multiple callbacks sharing one connection and to non-reused connections alike', async () => {
+        it('delivers the batch to every connection to the collection', async () => {
             const shared1 = await subscribe(KEYS.COLLECTION.TEST);
             const shared2 = await subscribe(KEYS.COLLECTION.TEST);
             const unique: unknown[] = [];
-            connections.push(Onyx.connect({key: KEYS.COLLECTION.TEST, reuseConnection: false, callback: (value: unknown) => unique.push(value)}));
+            connections.push(Onyx.connect({key: KEYS.COLLECTION.TEST, callback: (value: unknown) => unique.push(value)}));
             await waitForPromisesToResolve();
             unique.length = 0;
 

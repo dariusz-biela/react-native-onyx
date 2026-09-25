@@ -125,7 +125,23 @@ describe('useOnyx in the receiving tab', () => {
         await syncToReader();
 
         expect(level.result.current[0]).toEqual({test_level_1: {id: 1}});
-        expect(test.hook.result.current[0]).toBeUndefined();
+        expect(test.hook.result.current[0]).toEqual({});
         expect(test.renders()).toBe(before);
+    });
+
+    describe('current behaviour (#834 change)', () => {
+        // main rendered undefined for a collection that has no members.
+        it('renders an empty object for a collection with no members', async () => {
+            const {useOnyx} = reader;
+            const rendered: unknown[] = [];
+            renderHook(() => {
+                const result = useOnyx(KEYS.COLLECTION.TEST);
+                rendered.push(result[0]);
+                return result;
+            });
+            await act(settle);
+
+            expect(rendered).toEqual([{}]);
+        });
     });
 });
