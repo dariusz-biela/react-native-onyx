@@ -3,7 +3,7 @@ import ONYXKEYS from '@app/ONYXKEYS';
 import Onyx from 'react-native-onyx';
 
 import {getHeavyAccount, seedOnyxWithAccount} from '../../fixtures/account';
-import {QUICK_MEASURE} from '../../harness/measure';
+import {QUICK_MEASURE} from '../../harness/measureOptions';
 import {waitForOnyx} from '../../harness/onyx';
 import type {RenderedTree} from '../../harness/react';
 import {actAsync, renderProbes, unmountTree} from '../../harness/react';

@@ -24,6 +24,6 @@
             "react/*": ["./node_modules/@types/react/*"]
         }
     },
-    "include": ["app", "entry", "fixtures", "harness", "jest", "scripts", "suites"],
+    "include": ["app", "browser", "entry", "fixtures", "harness", "jest", "scripts", "suites"],
     "exclude": ["app/snapshot", "node_modules", ".build", ".hotswap", ".jest-cache", "results"]
 }

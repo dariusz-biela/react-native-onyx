@@ -2,8 +2,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import type {MeasureResult} from './measure';
-import type {Scenario, ScenarioParams} from './scenario';
+import type {MeasureResult} from './laneLoop';
+import type {ScenarioMetadata, ScenarioParams} from './scenario';
+
+import {median, medianAbsoluteDeviation} from './stats';
 
 /** Bumped whenever the NDJSON line shape changes, so `compare.ts` can refuse an old run. */
 const RESULT_SCHEMA_VERSION = 1;
@@ -67,7 +69,7 @@ function getRunMetadata(origin?: ResultOrigin): RunMetadata {
 }
 
 /** Appends one line per scenario. Appending keeps a crashed suite file's earlier scenarios usable. */
-function appendScenarioResult(scenario: Scenario, params: ScenarioParams, result: MeasureResult, origin?: ResultOrigin, cost?: ScenarioCost): void {
+function appendScenarioResult(scenario: ScenarioMetadata, params: ScenarioParams, result: MeasureResult, origin?: ResultOrigin, cost?: ScenarioCost): void {
     const resultsFile = requireEnv('ONYX_PERF_RESULTS_FILE');
     fs.mkdirSync(path.dirname(resultsFile), {recursive: true});
 
@@ -94,7 +96,12 @@ function appendScenarioResult(scenario: Scenario, params: ScenarioParams, result
     fs.appendFileSync(resultsFile, `${JSON.stringify(line)}\n`, 'utf8');
 }
 
+function logResult(label: string, result: MeasureResult): void {
+    // eslint-disable-next-line no-console
+    console.info(`${label}: median ${median(result.samples).toFixed(3)} ms, MAD ${medianAbsoluteDeviation(result.samples).toFixed(3)} ms, n=${result.samples.length}`);
+}
+
 export default appendScenarioResult;
-export {RESULT_SCHEMA_VERSION, getRunMetadata};
+export {RESULT_SCHEMA_VERSION, getRunMetadata, logResult};
 export type {RunMetadata, ScenarioResultLine};
 export type {ResultOrigin, ScenarioCost};

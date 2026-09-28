@@ -171,9 +171,10 @@ runs `structuredClone` on every put and get, which is the main-thread part of a 
 operation; the backend (LevelDB, IPC, disk) is not reproduced and the SQLite provider needs a native module,
 so nothing here says anything about native. `multiMerge` and `mergeItem` cannot run on `fake-indexeddb`
 (see HANDOFF.md), so the web merge path is `internals/OnyxMerge/apply-web` plus `storage/idb/setItem-*`.
-The `storage/idb-model/*` rows and `storage/instance-sync/receive` run the arm's real provider on
-`harness/idbModel.ts` instead: an in-memory object store that clones on get and put and counts
-transactions, reads and writes, so the merge path can be timed and counted through Onyx.
+The `storage/web/*` rows run in headless Chromium on the browser's own, disk-backed IndexedDB instead
+(`browser/runner.ts`, see README), with the arm's web build of Onyx: the real `IDBKeyValProvider`, the
+real `InstanceSync` `storage` listener, and a timed region that ends at the IndexedDB commit. Counters from
+`browser/page/idbCounters.ts` record transactions, reads and writes per iteration.
 
 | id | what is timed | real usage | status |
 |---|---|---|---|
@@ -183,10 +184,10 @@ transactions, reads and writes, so the merge path can be timed and counted throu
 | storage/idb/multiGet-report-members | `multiGet` of min(100, N) report member keys | cold collection reads | `storage/idb.perf.ts` |
 | storage/idb/removeItems-sign-out | `removeItems` of every stored key but the preserved ones | `SignInRedirect.ts:104` | `storage/idb.perf.ts`, the reseed in beforeEach is untimed and costs more than the removal |
 | storage/instance-sync/raise-events | the web `InstanceSync` events of one write: `multiSet` of U member keys, one `setItem`, and `removeItems` of every stored key | `OnyxUpdates.ts:128`, `SignInRedirect.ts:104` | `storage/instanceSync.perf.ts`, jsdom's `localStorage`, read for the Onyx share |
-| storage/idb-model/mergeCollection-reports | `Onyx.mergeCollection` of one field into U existing report members, on the IndexedDB model | `OnyxUpdates.ts:66`, `Report/index.ts:982` | `storage/idbModel.perf.ts`, `reads` is the members the provider's `multiMerge` reads back although the cache already holds them |
-| storage/idb-model/mergeCollection-report-actions | `Onyx.mergeCollection` of one new action into each active report-actions member, on the IndexedDB model | `OnyxUpdates.ts:66`, `OnyxUpdates.ts:126` | `storage/idbModel.perf.ts`, every whole member is read and cloned back |
-| storage/idb-model/update-batch | one `Onyx.update` reconnect batch (U reports, action merges into 5 reports, 3 plain-key sets), on the IndexedDB model | `OnyxUpdates.ts:66`, `App.ts:423` | `storage/idbModel.perf.ts`, `writeTransactions` is how many transactions one batch opens |
-| storage/instance-sync/receive | the web `InstanceSync` receiving another tab's `storage` event for U report members and one plain key, through reading every key back from storage | `src/setup/index.ts:45`, `OnyxUpdates.ts:128` | `storage/instanceSync.perf.ts`, on the IndexedDB model; includes InstanceSync's own `setTimeout(0)` |
+| storage/web/mergeCollection-reports | `Onyx.mergeCollection` of one field into U existing report members, down to the IndexedDB commit | `OnyxUpdates.ts:66`, `Report/index.ts:982` | `storage/indexedDB.browser.ts`, `reads` is the members the provider's `multiMerge` reads back although the cache already holds them |
+| storage/web/mergeCollection-report-actions | `Onyx.mergeCollection` of one new action into each active report-actions member, down to the IndexedDB commit | `OnyxUpdates.ts:66`, `OnyxUpdates.ts:126` | `storage/indexedDB.browser.ts`, every whole member is read and cloned back |
+| storage/web/update-batch | one `Onyx.update` reconnect batch (U reports, action merges into 5 reports, 3 plain-key sets), down to the IndexedDB commits | `OnyxUpdates.ts:66`, `App.ts:423` | `storage/indexedDB.browser.ts`, `writeTransactions` is how many transactions one batch opens |
+| storage/web/instance-sync-receive | the web `InstanceSync` receiving another tab's `storage` event for U report members and the personal details list, reading every key back from IndexedDB, until a subscriber on the last member sees it | `src/setup/index.ts:45`, `OnyxUpdates.ts:128` | `storage/instanceSync.browser.ts`; includes InstanceSync's own `setTimeout(0)` |
 
 ## Coverage check
 

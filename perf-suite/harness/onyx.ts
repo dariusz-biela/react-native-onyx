@@ -78,9 +78,16 @@ function initOnyxForPerf(): void {
  * Drains everything Onyx can defer a notification onto: the microtask queue, `process.nextTick`
  * (which Onyx uses to batch subscriber callbacks) and one macrotask turn. Same intent as
  * `tests/utils/waitForBatchedUpdates.ts`, minus its fake-timer branch, because the suite runs on
- * real timers.
+ * real timers. A browser page has neither `setImmediate` nor `nextTick`; there Onyx batches on
+ * microtasks and timers, and one timer turn drains both.
  */
 function waitForOnyx(): Promise<void> {
+    if (typeof setImmediate !== 'function') {
+        return new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+    }
+
     return new Promise((resolve) => {
         setImmediate(() => {
             process.nextTick(() => {

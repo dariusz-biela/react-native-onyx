@@ -23,6 +23,9 @@
 # a single one. --filter narrows the scenarios a suite file registers; --files is a regular expression over
 # suite file paths, so only the matching suite files are loaded at all.
 #
+# After the Jest run of each scale, the browser lanes run the .browser.ts suite files in headless Chromium on
+# real IndexedDB (browser/runner.ts), baseline against candidate in lockstep, into browser-<scale>.ndjson.
+#
 # --aa replaces the candidate with a second copy of the baseline, which turns the report into a
 # noise floor: every scenario should land near 0%.
 #
@@ -203,6 +206,29 @@ run_hotswap_scale() {
     echo "-- $scale done in $((SECONDS - started_at)) s --"
 }
 
+# The browser lanes (browser/runner.ts): the .browser.ts suite files in headless Chromium, on its own
+# IndexedDB, both arms in lockstep whatever the mode. They only need the two dist directories.
+run_browser_scale() {
+    local scale="$1"
+    local log="$RUN_DIR/browser-$scale.log"
+    local started_at=$SECONDS
+
+    if ! ONYX_PERF_BROWSER_ARMS="$(printf '{"baseline":"%s","candidate":"%s"}' "$BASELINE_DIR" "$CANDIDATE_DIR")" \
+        ONYX_PERF_HOTSWAP_ROUNDS="$ROUNDS" \
+        ONYX_PERF_RUN_ID="$RUN_ID" \
+        ONYX_PERF_SCALE="$scale" \
+        ONYX_PERF_FILTER="$FILTER" \
+        ONYX_PERF_FILES="$FILES" \
+        ONYX_PERF_RESULTS_FILE="$RUN_DIR/browser-$scale.ndjson" \
+        caffeinate -i node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$HERE/browser/cli.ts" >"$log" 2>&1; then
+        echo "ab: browser lanes, $scale failed, see $log" >&2
+        tail -n 40 "$log" >&2
+        return 1
+    fi
+
+    echo "-- $scale browser lanes done in $((SECONDS - started_at)) s --"
+}
+
 run_classic_scale() {
     local scale="$1"
 
@@ -224,11 +250,13 @@ STARTED_AT=$SECONDS
 if [[ "$IS_CLASSIC" == true ]]; then
     for scale in "${SCALE_LIST[@]}"; do
         run_classic_scale "$scale"
+        run_browser_scale "$scale"
     done
 else
     echo "-- hotswap, $ROUNDS blocks, scales ${SCALE_LIST[*]} --"
     for scale in "${SCALE_LIST[@]}"; do
         run_hotswap_scale "$scale"
+        run_browser_scale "$scale"
     done
 fi
 

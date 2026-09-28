@@ -5,7 +5,7 @@ import type {NullishDeep} from 'react-native-onyx';
 import utils from 'react-native-onyx/dist/utils';
 
 import {getHeavyAccount, getSeedPairs, storeKeyCount} from '../../fixtures/account';
-import {QUICK_MEASURE} from '../../harness/measure';
+import {QUICK_MEASURE} from '../../harness/measureOptions';
 import runScenarios from '../../harness/runScenarios';
 import defineScenario from '../../harness/scenario';
 

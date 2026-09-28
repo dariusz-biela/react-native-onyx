@@ -12,6 +12,8 @@
         "@types/react-test-renderer": "19.1.0",
         "babel-plugin-react-compiler": "0.0.0-experimental-a1856f3-20260507",
         "date-fns": "4.1.0",
+        "esbuild": "0.28.1",
+        "playwright-core": "1.63.0",
         "react": "19.2.3",
         "react-test-renderer": "19.2.3"
     }

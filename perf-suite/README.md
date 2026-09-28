@@ -131,6 +131,25 @@ The two arms must live at two different paths. Jest's module registry is keyed b
 clones the baseline to `<baseline>-aa` and uses the clone as the candidate; an A/A without the clone
 shares one Onyx instance between the "arms".
 
+## Browser lanes
+
+The `.browser.ts` suite files run outside Jest, in headless Chromium on the browser's own IndexedDB. After
+the Jest run of every scale, `ab.sh` calls `browser/cli.ts`, which bundles `browser/runner.ts` for Node and
+one page per arm (`browser/bundlePage.ts`: the arm's dist with its `.web.js` files first, the harness and the
+suite files), then measures every scenario with the Jest lanes' loop (`harness/laneLoop.ts`), both arms in
+lockstep. Its log is `results/<run-id>/browser-<scale>.log` and its results `browser-<scale>.ndjson`.
+
+- **One Chromium per arm and scenario**, each on a fresh persistent profile in a temp directory: an
+  incognito context may keep IndexedDB in memory, and the rows exist to measure the disk-backed store.
+- **Timings are taken inside the page.** Every step of the loop is one `page.evaluate`, so the CDP round
+  trip never lands in a sample. The page is served cross-origin isolated, so `performance.now()` resolves
+  to 5µs instead of 100µs; the runner refuses a page that is not isolated or has no `gc()`.
+- **Counters** (`browser/page/idbCounters.ts`) patch the IndexedDB prototypes to count transactions,
+  reads and writes, and `whenIDBIdle` keeps one iteration's writes out of the next sample.
+
+The browser lanes at all three scales take about 25 s (small 4 s, large 7 s, heavy 12 s on an M5 Pro). To run them alone, point `--files` at them:
+`ab.sh --aa --files '\.browser\.ts'`.
+
 An arm may lack an internal the suite measures (ONYX-PR#834 removed `OnyxConnectionManager`,
 `createMemoizedSelector`, `memoizedShallowEqual`, `OnyxSnapshotCache` and the `OnyxUtils` methods
 `tryGetCachedValue`, `keyChanged`, `keysChanged`). Such a file loads the module through
@@ -265,9 +284,9 @@ the numbers. Use `--scale` or `--files` for a shorter run instead.
   JIT and prices closures, `Map`/`WeakMap` traffic and property access differently, and
   Expensify/App#100271 shows the same Onyx change landing at -12% on web and +1% on native for one
   metric. A hook-level win measured here is a V8 number until it is checked on a device.
-- **The storage backend.** `suites/storage` runs the real `IDBKeyValProvider` on `fake-indexeddb`, which
-  reproduces the main-thread serialization (`structuredClone` per put and get) but not the browser's
-  IndexedDB backend. `SQLiteProvider` needs a native module and is not measured at all, so a native
+- **The storage backend on native.** The `storage/web/*` rows run on a real browser IndexedDB (see "Browser
+  lanes"), but the `storage/idb/*` rows still drive `IDBKeyValProvider` on `fake-indexeddb`, which
+  reproduces the main-thread serialization but not the backend. `SQLiteProvider` needs a native module and is not measured at all, so a native
   storage cost (the `json_patch` merge, a full-table read at boot) has to come from a device.
 - **Navigation.** A key switch is a prop change on a handful of probes, not a screen transition; nothing
   here includes what React Navigation adds on top of the Onyx work.
@@ -279,7 +298,8 @@ the numbers. Use `--scale` or `--files` for a shorter run instead.
 
 `perf-suite/package.json` holds only what must differ from the repo root: the React version Expensify/App
 runs (19.2) with its `react-test-renderer` and type definitions, the React Compiler, and the data libraries of
-the fixture generators (`@ngneat/falso`, `date-fns`). Jest, Babel, TypeScript, `fake-indexeddb` and
+the fixture generators (`@ngneat/falso`, `date-fns`), and the browser lanes' `esbuild` and `playwright-core`
+(its Chromium comes from `npx playwright-core install chromium`). Jest, Babel, TypeScript, `fake-indexeddb` and
 `jest-environment-jsdom` resolve from the root `node_modules`. The root Jest config only crawls `lib/` and
 `tests/`, so it never sees the suite's second copy of React.
 

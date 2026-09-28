@@ -9,19 +9,29 @@ const SUITES_DIR = path.resolve(__dirname, '../suites');
  */
 const ISOLATED_SUITES = ['api/init.perf.ts', 'flows/boot.perf.ts'];
 
-function listSuiteFiles(directory: string): string[] {
+/** Jest suite files; `browser/runner.ts` lists the `.browser.ts` ones with its own pattern. */
+const JEST_SUITE_FILE_PATTERN = /\.perf\.tsx?$/;
+
+function listSuiteFiles(directory: string, namePattern = JEST_SUITE_FILE_PATTERN): string[] {
     return fs
         .readdirSync(directory, {withFileTypes: true})
         .flatMap((entry) => {
             const entryPath = path.join(directory, entry.name);
 
             if (entry.isDirectory()) {
-                return listSuiteFiles(entryPath);
+                return listSuiteFiles(entryPath, namePattern);
             }
 
-            return /\.perf\.tsx?$/.test(entry.name) ? [entryPath] : [];
+            return namePattern.test(entry.name) ? [entryPath] : [];
         })
         .sort((a, b) => a.localeCompare(b));
+}
+
+/** ONYX_PERF_FILES: a regular expression tested against each suite file's absolute path. */
+function selectSuiteFiles(files: readonly string[]): string[] {
+    const pattern = process.env.ONYX_PERF_FILES ? new RegExp(process.env.ONYX_PERF_FILES) : undefined;
+
+    return files.filter((file) => !pattern || pattern.test(file));
 }
 
 function toSuiteId(file: string): string {
@@ -44,11 +54,10 @@ function getSuiteFile(suiteId: string): string {
  * about half a second each time, which over 56 files was a third of a small-scale run.
  *
  * ONYX_PERF_FILES narrows the files the way `jest --testPathPattern` did: a regular expression tested
- * against each suite file's absolute path.
+ * against each suite file's absolute path, see `selectSuiteFiles`.
  */
 function loadSuites(files: readonly string[]): void {
-    const pattern = process.env.ONYX_PERF_FILES ? new RegExp(process.env.ONYX_PERF_FILES) : undefined;
-    const selected = files.filter((file) => !pattern || pattern.test(file));
+    const selected = selectSuiteFiles(files);
 
     if (selected.length === 0) {
         it.skip(`no suite file here matches ONYX_PERF_FILES="${process.env.ONYX_PERF_FILES ?? ''}"`, () => {});
@@ -63,4 +72,4 @@ function loadSuites(files: readonly string[]): void {
     }
 }
 
-export {getSharedSuiteFiles, getSuiteFile, loadSuites};
+export {getSharedSuiteFiles, getSuiteFile, listSuiteFiles, loadSuites, selectSuiteFiles};

@@ -9,7 +9,7 @@ import {useLayoutEffect, useState} from 'react';
 import type {RenderedTree} from '../../harness/react';
 
 import {getHeavyAccount, seedOnyxWithAccount} from '../../fixtures/account';
-import {QUICK_MEASURE} from '../../harness/measure';
+import {QUICK_MEASURE} from '../../harness/measureOptions';
 import {waitForOnyx} from '../../harness/onyx';
 import {actAsync, buildProbeList, unmountTree} from '../../harness/react';
 import {getRenderCount, resetRenderCount} from '../../harness/renderCount';

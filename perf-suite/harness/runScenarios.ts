@@ -1,25 +1,21 @@
-import type {MeasureLane, MeasureResult} from './measure';
+import type {MeasureResult} from './laneLoop';
+import type {MeasureLane} from './measure';
 import type {ScaleProfile} from './scale';
 import type {Scenario} from './scenario';
 
 import nowMs from './clock';
-import {getArmNames, getHotswapBlockCount, isHotswapRun, setActiveArm} from './hotswap';
-import measureScenario, {measureLanes, splitIntoBlocks} from './measure';
+import {getArmNames, isHotswapRun, setActiveArm} from './hotswap';
+import {getBlockCount, splitIntoBlocks} from './laneLoop';
+import measureScenario, {measureLanes} from './measure';
 import {initOnyxForPerf, resetOnyx} from './onyx';
 import {everyArm, hasOnyxModule} from './optionalOnyxModule';
-import appendScenarioResult from './results';
+import appendScenarioResult, {logResult} from './results';
 import type {ResultOrigin} from './results';
 import getScaleProfile from './scale';
-import {median, medianAbsoluteDeviation} from './stats';
+import {matchesFilter} from './scenario';
 
 function selectScenarios(scenarios: readonly Scenario[]): Scenario[] {
-    const filter = process.env.ONYX_PERF_FILTER;
-
-    if (!filter) {
-        return [...scenarios];
-    }
-
-    return scenarios.filter((scenario) => scenario.id.includes(filter) || scenario.title.includes(filter));
+    return scenarios.filter((scenario) => matchesFilter(scenario, process.env.ONYX_PERF_FILTER));
 }
 
 async function measureOnce(scenario: Scenario, profile: ScaleProfile, origin?: ResultOrigin): Promise<MeasureResult> {
@@ -34,11 +30,6 @@ async function measureOnce(scenario: Scenario, profile: ScaleProfile, origin?: R
     appendScenarioResult(scenario, runner.params, result, origin, {setupMs: runner.setupMs, wallMs: nowMs() - startedAt});
 
     return result;
-}
-
-function logResult(label: string, result: MeasureResult) {
-    // eslint-disable-next-line no-console
-    console.info(`${label}: median ${median(result.samples).toFixed(3)} ms, MAD ${medianAbsoluteDeviation(result.samples).toFixed(3)} ms, n=${result.samples.length}`);
 }
 
 type ArmLane = MeasureLane & {arm: string};
@@ -73,7 +64,7 @@ async function measureHotswapInterleaved(scenario: Scenario, profile: ScaleProfi
         const lane = lanes[index];
         logResult(`${scenario.id} [${lane.arm}]`, result);
 
-        splitIntoBlocks(result, getHotswapBlockCount()).forEach((block, blockIndex) => {
+        splitIntoBlocks(result, getBlockCount()).forEach((block, blockIndex) => {
             appendScenarioResult(scenario, lane.runner.params, block, {arm: lane.arm, round: blockIndex + 1}, {setupMs: lane.runner.setupMs, wallMs});
         });
     });

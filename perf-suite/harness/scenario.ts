@@ -25,7 +25,7 @@ type ScenarioParams = Readonly<Record<string, number>>;
 /** Extra per-iteration measurements, for example how many subscriber callbacks a write produced. */
 type Counters = Readonly<Record<string, number>>;
 
-/** Per-scenario overrides of the harness defaults in `measure.ts`. */
+/** Per-scenario overrides of the harness defaults in `measureOptions.ts`. */
 type MeasureOverrides = {
     warmupIterations?: number;
 
@@ -88,13 +88,17 @@ type ScenarioRunner = {
     teardown?: () => Promise<void>;
 };
 
-/** The generic-free shape `runScenarios` stores in a list. */
-type Scenario = {
+/** What the report records about a scenario, wherever it ran. */
+type ScenarioMetadata = {
     id: string;
     area: ScenarioArea;
     title: string;
     realUsage: readonly RealUsageAnchor[];
     sizeIndependent?: string;
+};
+
+/** The generic-free shape `runScenarios` stores in a list. */
+type Scenario = ScenarioMetadata & {
     measure?: MeasureOverrides;
     isSupported: () => boolean;
     resolveParams: (profile: ScaleProfile) => ScenarioParams;
@@ -113,6 +117,11 @@ function areaOf(id: string): ScenarioArea {
     }
 
     return area;
+}
+
+/** ONYX_PERF_FILTER: a scenario runs when its id or title contains the filter. */
+function matchesFilter(scenario: ScenarioMetadata, filter: string | undefined): boolean {
+    return !filter || scenario.id.includes(filter) || scenario.title.includes(filter);
 }
 
 /**
@@ -152,5 +161,5 @@ function defineScenario<TContext, TParams extends ScenarioParams>(definition: Sc
 }
 
 export default defineScenario;
-export {AREAS, areaOf};
-export type {Counters, MeasureOverrides, RealUsageAnchor, Scenario, ScenarioArea, ScenarioParams, ScenarioRunner};
+export {AREAS, areaOf, matchesFilter};
+export type {Counters, MeasureOverrides, RealUsageAnchor, Scenario, ScenarioArea, ScenarioMetadata, ScenarioParams, ScenarioRunner};
