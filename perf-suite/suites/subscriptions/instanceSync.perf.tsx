@@ -2,19 +2,18 @@ import ONYXKEYS from '@app/ONYXKEYS';
 
 import type {OnyxKey, OnyxValue} from 'react-native-onyx';
 
-import Storage from 'react-native-onyx/dist/storage';
-
 import type {HeavyAccount} from '../../fixtures/account';
+import type {OnStorageKeysChanged} from '../../harness/instanceSync';
 import type {LoadedApp} from '../../harness/loadedApp';
 
 import {getHeavyAccount, seedOnyxWithAccount} from '../../fixtures/account';
+import captureInstanceSyncHandler from '../../harness/instanceSync';
 import mountLoadedApp from '../../harness/loadedApp';
-import {initOnyxForPerf, waitForOnyx} from '../../harness/onyx';
+import {waitForOnyx} from '../../harness/onyx';
 import {actAsync} from '../../harness/react';
 import runScenarios from '../../harness/runScenarios';
 import defineScenario from '../../harness/scenario';
 
-type OnStorageKeysChanged = Parameters<NonNullable<typeof Storage.keepInstancesSync>>[0];
 type RemotePair = [OnyxKey, OnyxValue<OnyxKey>];
 
 type InstanceSyncContext = {
@@ -24,37 +23,6 @@ type InstanceSyncContext = {
     pairs: RemotePair[];
     state: {revision: number};
 };
-
-/**
- * On web the App leaves `shouldSyncMultipleInstances` at its default, which is on wherever `localStorage`
- * exists, so every write another tab makes is applied here again: `Onyx.init` hands the storage layer a
- * handler that puts the changed pairs into the cache and notifies every subscriber, one `keysChanged` per
- * collection. The handler is a closure inside `Onyx.init`, so `setup` runs the App's init once more with the
- * storage layer's `keepInstancesSync` swapped for a function that keeps it.
- */
-async function captureInstanceSyncHandler(): Promise<OnStorageKeysChanged> {
-    let captured: OnStorageKeysChanged | undefined;
-
-    Storage.keepInstancesSync = (handler) => {
-        captured = handler;
-    };
-
-    try {
-        initOnyxForPerf();
-        await waitForOnyx();
-    } finally {
-        // The mock storage's own `keepInstancesSync` is a bare `jest.fn()`, so a fresh one restores it. Reading
-        // the original back would not: in a hot-swap run it comes out of the shim as a late-bound wrapper that
-        // calls whatever the property holds, and put back it would call itself on the next init.
-        Storage.keepInstancesSync = jest.fn();
-    }
-
-    if (!captured) {
-        throw new Error('subscriptions/instance-sync: Onyx.init did not register an instance sync handler; is localStorage missing from the environment?');
-    }
-
-    return captured;
-}
 
 /** What another tab's write of U report members plus two plain keys delivers: the stored values, not patches. */
 function buildRemotePairs(account: HeavyAccount, members: number, revision: number): RemotePair[] {

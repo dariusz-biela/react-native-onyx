@@ -60,6 +60,22 @@ function getArmFiles(relativePath) {
     return armNames.map((name) => path.join(arms[name], relativePath));
 }
 
+/**
+ * Absolute path of `relativePath` inside the arm that is active right now, for a scenario that has to reach
+ * that arm's own module object (a jest.fn on its storage mock, say) rather than the late-bound shim. A
+ * classic single-arm run has no arm map, so it reads the one arm Jest was started with.
+ */
+function getActiveArmFile(relativePath) {
+    const armDir = armNames.length > 0 ? arms[sharedState.activeArm] : process.env.ONYX_PERF_ARM_DIR;
+
+    if (!armDir) {
+        throw new Error('getActiveArmFile: no arm directory; run the suite through run-arm.sh or ab.sh.');
+    }
+
+    // Relative arm directories are relative to perf-suite/, as jest.config.js resolves them.
+    return path.join(path.resolve(__dirname, '../..', armDir), relativePath);
+}
+
 function loadActive(relativePath) {
     const activeArm = sharedState.activeArm;
     const cache = modulesByArm.get(activeArm);
@@ -196,4 +212,4 @@ function createModuleShim(relativePath) {
     );
 }
 
-module.exports = {createModuleShim, getActiveArm, getArmFiles, getArmNames, setActiveArm};
+module.exports = {createModuleShim, getActiveArm, getActiveArmFile, getArmFiles, getArmNames, setActiveArm};

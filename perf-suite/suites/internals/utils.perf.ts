@@ -4,7 +4,8 @@ import type {NullishDeep} from 'react-native-onyx';
 
 import utils from 'react-native-onyx/dist/utils';
 
-import {getHeavyAccount} from '../../fixtures/account';
+import {getHeavyAccount, getSeedPairs, storeKeyCount} from '../../fixtures/account';
+import {QUICK_MEASURE} from '../../harness/measure';
 import runScenarios from '../../harness/runScenarios';
 import defineScenario from '../../harness/scenario';
 
@@ -23,7 +24,14 @@ type CompatibilityContext = {
     pairs: Array<[unknown, unknown]>;
 };
 
+type NormalizationContext = {
+    values: unknown[];
+};
+
 const COMPATIBILITY_CALLS = 10000;
+
+// One pass over the small account is around a tenth of a millisecond, so a sample repeats the walk like the null stripper row.
+const NORMALIZATION_PASSES_PER_SAMPLE = 10;
 
 // One pass over the list is around a tenth of a millisecond, close enough to the harness's own overhead
 // around the timed region to matter, so a sample repeats the call.
@@ -104,4 +112,28 @@ const compatibilityChecks = defineScenario({
     },
 });
 
-runScenarios([removeNestedNulls, compatibilityChecks]);
+const accountNormalizationCheck = defineScenario({
+    id: 'internals/utils/needsNormalization-account',
+    title: 'ten needsNormalization passes over every value of the seeded account, the walk OnyxCache hydration runs over the whole database at boot: a clean value is walked to its last leaf, one holding a nested null stops at the first',
+    realUsage: [{file: 'src/setup/index.ts', line: 45, note: 'Onyx.init, which hydrates the cache from the whole database and checks every value on the way'}],
+    scale: (profile) => ({storeKeys: storeKeyCount(profile), passesPerSample: NORMALIZATION_PASSES_PER_SAMPLE}),
+    measure: QUICK_MEASURE,
+    requires: () => typeof utils.needsNormalization === 'function',
+    setup: async (): Promise<NormalizationContext> => ({values: Object.values(getSeedPairs(getHeavyAccount()))}),
+    run: async (context, params) => {
+        let needingNormalization = 0;
+
+        for (let pass = 0; pass < NORMALIZATION_PASSES_PER_SAMPLE; pass++) {
+            needingNormalization = 0;
+            for (const value of context.values) {
+                if (utils.needsNormalization(value)) {
+                    needingNormalization++;
+                }
+            }
+        }
+
+        return {values: context.values.length, passesPerSample: params.passesPerSample, needingNormalization};
+    },
+});
+
+runScenarios([removeNestedNulls, compatibilityChecks, accountNormalizationCheck]);

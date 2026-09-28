@@ -48,6 +48,12 @@ const DEFAULT_OPTIONS: MeasureOptions = {
     settleGcPasses: 0,
 };
 
+/**
+ * A short budget for rows that exist to test one optimisation idea: two warm-up turns and twelve samples per
+ * lane (three per block of a hot-swap run), stopping at 24 or one second, whichever comes first.
+ */
+const QUICK_MEASURE: MeasureOverrides = {warmupIterations: 2, warmupBudgetMs: 100, minIterations: 12, maxIterations: 24, timeBudgetMs: 1000};
+
 function readPositiveIntegerEnv(name: string): number | undefined {
     const value = Number(process.env[name] ?? '');
     return Number.isInteger(value) && value > 0 ? value : undefined;
@@ -417,5 +423,5 @@ function splitIntoBlocks(result: MeasureResult, blocks: number): MeasureResult[]
 }
 
 export default measureScenario;
-export {DEFAULT_OPTIONS, measureLanes, splitIntoBlocks};
+export {DEFAULT_OPTIONS, QUICK_MEASURE, measureLanes, splitIntoBlocks};
 export type {GcMode, MeasureLane, MeasureOptions, MeasureResult};

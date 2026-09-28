@@ -171,5 +171,5 @@ async function seedOnyxWithAccount(account: HeavyAccount): Promise<void> {
     await waitForOnyx();
 }
 
-export {CURRENT_USER_ACCOUNT_ID, CURRENT_USER_EMAIL, getHeavyAccount, seedOnyxWithAccount, storeKeyCount};
+export {CURRENT_USER_ACCOUNT_ID, CURRENT_USER_EMAIL, getHeavyAccount, getSeedPairs, seedOnyxWithAccount, storeKeyCount};
 export type {HeavyAccount};

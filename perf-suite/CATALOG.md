@@ -93,7 +93,9 @@ renderer the app's hook tests use. `K` = `hookComponents` from the scale profile
 | hooks/loading-status/pending-merge | mount while a merge for the key is queued (status `loading` path) | initial data fetch | `hooks/loadingStatus.perf.tsx`, the pending merge is started inside the timed region |
 | hooks/mount/collection-selector | mount K components on `COLLECTION.REPORT` through one module-level selector that projects all N reports | `src/hooks/usePersonalDetailOptions.ts:188`, one of 121 collection-plus-selector sites | `hooks/collectionSelector.perf.tsx`, every hook renders twice on mount, see HANDOFF.md |
 | hooks/update/collection-selector | one report member merge with those K hooks mounted, so every hook re-projects all N reports | same | `hooks/collectionSelector.perf.tsx` |
+| hooks/update/collection-selector-unselected-field | one merge of `lastReadTime`, a field the selector drops, into U report members with those K hooks mounted: every hook re-projects all N reports and none re-renders | `OnyxUpdates.ts:66`, `Report/index.ts:982` | `hooks/collectionSelector.perf.tsx`, expect `renders: 0`; the whole row is the re-projection an incremental collection selector would skip |
 | hooks/update/per-instance-selector | one personal details merge changing one person, with K hooks on the N-entry list each selecting a different person | `MoneyRequestHeader.tsx:63`, `selectors/PersonalDetails.ts:26` | `hooks/update.perf.tsx`, one hook re-renders |
+| hooks/priority/input-after-background-write | a default-priority `setState` issued right after a `mergeCollection` of U report members that K whole-collection selector hooks read, timed until the input commits | `usePersonalDetailOptions.ts:188` on screen while typing, `OnyxUpdates.ts:128` | `hooks/priority.perf.tsx`, runs outside `act` on React's scheduler; `probeRendersBeforeInput` is how many hooks rendered (at SyncLane, through `useSyncExternalStore`) before the input did |
 | hooks/unmount-remount/member-keys | mount plus unmount K components each on its own report member key (the LHN fling) | `OptionRowLHNData.tsx:125` | `hooks/memberChurn.perf.tsx`, read against `hooks/unmount-remount/churn` |
 | hooks/expense-list/{pattern}/mount | mount a 100-row expense list over the scale's N transactions, `{pattern}` is `root-all`, `root-all-memo`, `root-ids`, `root-ids-memo` or `root-fresh-items` (the root rebuilds every item object on each change, like getSections on Search, `useSearchSnapshot.ts:188`) | `MoneyRequestReportTransactionList.tsx:172` | `hooks/expenseList.perf.tsx`; `root-all*` read the full transactions in the root and pass them down (`MoneyRequestReportView.tsx:134`), `root-ids*` read ids in the root and each row reads its own member key (`TransactionPreview/index.tsx:52`), `*-memo` wrap the row in `memo`. Compare patterns with `scripts/variants.ts` |
 | hooks/expense-list/{pattern}/edit-one | one `Onyx.merge` into one listed transaction | `UpdateMoneyRequest.ts:518` | `hooks/expenseList.perf.tsx` |
@@ -124,6 +126,7 @@ renderer the app's hook tests use. `K` = `hookComponents` from the scale profile
 | internals/utils/fastMerge-deep | `fastMerge` of two realistic reportActions maps (300 + 50) | every merge | `internals/fastMerge.perf.ts` |
 | internals/utils/fastMerge-shallow | `fastMerge` of a report with a 2-field patch | every small merge | `internals/fastMerge.perf.ts` |
 | internals/utils/removeNestedNullValues | over the personal details list with scattered nulls | set/multiSet prepare | `internals/utils.perf.ts`, ten passes per sample |
+| internals/utils/needsNormalization-account | `needsNormalization` over every stored value of the account, the walk hydrate runs at boot | `src/setup/index.ts:45` | `internals/utils.perf.ts`, ten passes per sample; `needingNormalization` counts the values holding a nested null, where the walk stops early |
 | internals/utils/checkCompatibilityWithExistingValue | 10k calls | merge queue | `internals/utils.perf.ts` |
 | internals/OnyxMerge/apply | ten `OnyxMerge.applyMerge` calls on report + patches, the native variant the directory import resolves to | merge path | `internals/onyxMerge.perf.ts`, ten calls per sample |
 | internals/OnyxMerge/apply-web | the same ten calls through the web variant, imported by its explicit `index.js` path | merge path on web | `internals/onyxMerge.perf.ts`, the `isWebVariant` counter proves which file ran |
@@ -168,6 +171,9 @@ runs `structuredClone` on every put and get, which is the main-thread part of a 
 operation; the backend (LevelDB, IPC, disk) is not reproduced and the SQLite provider needs a native module,
 so nothing here says anything about native. `multiMerge` and `mergeItem` cannot run on `fake-indexeddb`
 (see HANDOFF.md), so the web merge path is `internals/OnyxMerge/apply-web` plus `storage/idb/setItem-*`.
+The `storage/idb-model/*` rows and `storage/instance-sync/receive` run the arm's real provider on
+`harness/idbModel.ts` instead: an in-memory object store that clones on get and put and counts
+transactions, reads and writes, so the merge path can be timed and counted through Onyx.
 
 | id | what is timed | real usage | status |
 |---|---|---|---|
@@ -177,6 +183,10 @@ so nothing here says anything about native. `multiMerge` and `mergeItem` cannot 
 | storage/idb/multiGet-report-members | `multiGet` of min(100, N) report member keys | cold collection reads | `storage/idb.perf.ts` |
 | storage/idb/removeItems-sign-out | `removeItems` of every stored key but the preserved ones | `SignInRedirect.ts:104` | `storage/idb.perf.ts`, the reseed in beforeEach is untimed and costs more than the removal |
 | storage/instance-sync/raise-events | the web `InstanceSync` events of one write: `multiSet` of U member keys, one `setItem`, and `removeItems` of every stored key | `OnyxUpdates.ts:128`, `SignInRedirect.ts:104` | `storage/instanceSync.perf.ts`, jsdom's `localStorage`, read for the Onyx share |
+| storage/idb-model/mergeCollection-reports | `Onyx.mergeCollection` of one field into U existing report members, on the IndexedDB model | `OnyxUpdates.ts:66`, `Report/index.ts:982` | `storage/idbModel.perf.ts`, `reads` is the members the provider's `multiMerge` reads back although the cache already holds them |
+| storage/idb-model/mergeCollection-report-actions | `Onyx.mergeCollection` of one new action into each active report-actions member, on the IndexedDB model | `OnyxUpdates.ts:66`, `OnyxUpdates.ts:126` | `storage/idbModel.perf.ts`, every whole member is read and cloned back |
+| storage/idb-model/update-batch | one `Onyx.update` reconnect batch (U reports, action merges into 5 reports, 3 plain-key sets), on the IndexedDB model | `OnyxUpdates.ts:66`, `App.ts:423` | `storage/idbModel.perf.ts`, `writeTransactions` is how many transactions one batch opens |
+| storage/instance-sync/receive | the web `InstanceSync` receiving another tab's `storage` event for U report members and one plain key, through reading every key back from storage | `src/setup/index.ts:45`, `OnyxUpdates.ts:128` | `storage/instanceSync.perf.ts`, on the IndexedDB model; includes InstanceSync's own `setTimeout(0)` |
 
 ## Coverage check
 

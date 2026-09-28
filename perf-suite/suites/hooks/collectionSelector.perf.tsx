@@ -1,53 +1,29 @@
-import useOnyx from '@app/useOnyx';
-
 import ONYXKEYS from '@app/ONYXKEYS';
-import type {Report} from '@app/types';
-
-import type {OnyxCollection} from 'react-native-onyx';
 
 import Onyx from 'react-native-onyx';
 
 import {getHeavyAccount, seedOnyxWithAccount} from '../../fixtures/account';
+import {QUICK_MEASURE} from '../../harness/measure';
 import {waitForOnyx} from '../../harness/onyx';
 import type {RenderedTree} from '../../harness/react';
 import {actAsync, renderProbes, unmountTree} from '../../harness/react';
-import {countRender, getRenderCount, resetRenderCount} from '../../harness/renderCount';
+import {getRenderCount, resetRenderCount} from '../../harness/renderCount';
 import runScenarios from '../../harness/runScenarios';
+import type {MeasureOverrides} from '../../harness/scenario';
 import defineScenario from '../../harness/scenario';
+import ReportSummariesProbe from './reportSummariesProbe';
 
 /**
  * A hook on a whole collection with a selector, the shape 121 call sites in `src/` use on the report
  * collection alone. On every member change Onyx hands the selector the whole collection object, so each
  * of the K hooks walks all N members again (`OnyxUtils.reduceCollectionWithSelector` is the internals row
- * for the same walk). The selector below is the one `usePersonalDetailOptions` keeps at module level:
+ * for the same walk). `reportSummariesSelector` is the one `usePersonalDetailOptions` keeps at module level:
  * it projects every report onto a few fields, so its result is a new object on every run and the compare
  * afterwards decides whether the component re-renders.
  */
 type CollectionSelectorContext = {
     state: {revision: number; tree: RenderedTree | undefined};
 };
-
-type ReportSummary = {reportID: string | undefined; reportName: string | undefined; policyID: string | undefined};
-
-/** Mirrors `reportsSelector` in `src/hooks/usePersonalDetailOptions.ts:66`: a projection of every report. */
-function reportSummariesSelector(reports: OnyxCollection<Report>): Record<string, ReportSummary> {
-    const summaries: Record<string, ReportSummary> = {};
-
-    for (const [key, report] of Object.entries(reports ?? {})) {
-        if (!report) {
-            continue;
-        }
-        summaries[key] = {reportID: report.reportID, reportName: report.reportName, policyID: report.policyID};
-    }
-
-    return summaries;
-}
-
-function ReportSummariesProbe() {
-    countRender();
-    useOnyx(ONYXKEYS.COLLECTION.REPORT, {selector: reportSummariesSelector});
-    return null;
-}
 
 const HOOK_MEASURE = {timeBudgetMs: 4000, minIterations: 12, maxIterations: 30};
 
@@ -86,35 +62,61 @@ const mountCollectionSelector = defineScenario({
     },
 });
 
-const updateCollectionSelector = defineScenario({
+type ReportPatch = {reportName: string} | {lastReadTime: string};
+
+type UpdateRowOptions = {
+    id: string;
+    title: string;
+    buildPatch: (revision: number) => ReportPatch;
+    measure: MeasureOverrides;
+};
+
+/** One report member merge under K mounted selector hooks; `buildPatch` decides whether the selected fields change. */
+function defineUpdateRow({id, title, buildPatch, measure}: UpdateRowOptions) {
+    return defineScenario({
+        id,
+        title,
+        realUsage: [...REAL_USAGE, {file: 'src/libs/actions/Report/index.ts', line: 982, note: 'the optimistic report head fields merged into one report member'}],
+        scale: (profile) => ({hookComponents: profile.hookComponents, reports: profile.reports}),
+        measure,
+        setup: async (params): Promise<CollectionSelectorContext> => {
+            await seedOnyxWithAccount(getHeavyAccount());
+
+            return {state: {revision: 0, tree: await renderProbes(params.hookComponents, ReportSummariesProbe)}};
+        },
+        beforeEach: async (context) => {
+            context.state.revision++;
+            resetRenderCount();
+        },
+        run: async (context, params) => {
+            await actAsync(async () => {
+                await Onyx.merge(`${ONYXKEYS.COLLECTION.REPORT}1`, buildPatch(context.state.revision));
+                await waitForOnyx();
+            });
+
+            return {mounted: params.hookComponents, renders: getRenderCount()};
+        },
+        teardown: async (context) => {
+            if (!context.state.tree) {
+                return;
+            }
+            await unmountTree(context.state.tree);
+        },
+    });
+}
+
+const updateCollectionSelector = defineUpdateRow({
     id: 'hooks/update/collection-selector',
     title: 'one report member merge with K hooks on the whole collection through a shared selector, so every hook re-projects all N reports',
-    realUsage: [...REAL_USAGE, {file: 'src/libs/actions/Report/index.ts', line: 982, note: 'the optimistic report head fields merged into one report member'}],
-    scale: (profile) => ({hookComponents: profile.hookComponents, reports: profile.reports}),
+    buildPatch: (revision) => ({reportName: `report ${revision}`}),
     measure: HOOK_MEASURE,
-    setup: async (params): Promise<CollectionSelectorContext> => {
-        await seedOnyxWithAccount(getHeavyAccount());
-
-        return {state: {revision: 0, tree: await renderProbes(params.hookComponents, ReportSummariesProbe)}};
-    },
-    beforeEach: async (context) => {
-        context.state.revision++;
-        resetRenderCount();
-    },
-    run: async (context, params) => {
-        await actAsync(async () => {
-            await Onyx.merge(`${ONYXKEYS.COLLECTION.REPORT}1`, {reportName: `report ${context.state.revision}`});
-            await waitForOnyx();
-        });
-
-        return {mounted: params.hookComponents, renders: getRenderCount()};
-    },
-    teardown: async (context) => {
-        if (!context.state.tree) {
-            return;
-        }
-        await unmountTree(context.state.tree);
-    },
 });
 
-runScenarios([mountCollectionSelector, updateCollectionSelector]);
+const updateUnselectedField = defineUpdateRow({
+    id: 'hooks/update/collection-selector-unselected-field',
+    title: 'one report member merge of a field the shared selector does not read, with K hooks on the whole collection: all N reports are re-projected and compared for a result that cannot change, 0 renders expected',
+    buildPatch: (revision) => ({lastReadTime: `2026-09-28 12:00:${String(revision % 60).padStart(2, '0')}.000`}),
+    measure: QUICK_MEASURE,
+});
+
+runScenarios([mountCollectionSelector, updateCollectionSelector, updateUnselectedField]);
